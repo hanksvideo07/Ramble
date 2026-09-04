@@ -49,7 +49,7 @@ final class Recorder {
             let session = AVAudioSession.sharedInstance()
             // .record rather than .playAndRecord: nothing plays while capturing,
             // and this keeps the session simple and reliable.
-            try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetooth])
+            try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetoothHFP])
             try session.setActive(true)
 
             let url = Self.newRecordingURL()
