@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ramble records what you say so it can turn it into notes, tasks, and reminders.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Ramble adds events you asked for out loud to your calendar.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Ramble adds reminders you asked for out loud to your reminders list.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Ramble shows a live transcript while you speak.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>processing</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Development only: the local server runs over plain HTTP on localhost.
+		     Production builds talk to an HTTPS host and this exception does not apply. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+</dict>
+</plist>

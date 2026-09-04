@@ -1,0 +1,419 @@
+import Foundation
+
+enum APIError: LocalizedError {
+    case notAuthenticated
+    case server(String)
+    case offline
+    case decoding(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthenticated: "Sign in to continue."
+        case .server(let message): message
+        case .offline: "You're offline. Your recordings are safe and will sync when you reconnect."
+        case .decoding(let detail): "Unexpected response from the server. (\(detail))"
+        }
+    }
+}
+
+/// Talks to the Ramble backend. The only place in the app that knows about
+/// HTTP, so views and stores deal in models rather than requests.
+actor APIClient {
+    static let shared = APIClient()
+
+    /// Points at the local server in development. A release build would read
+    /// this from the build configuration instead.
+    private let baseURL: URL = {
+        #if targetEnvironment(simulator)
+        URL(string: "http://localhost:8798")!
+        #else
+        // A device on the same network reaches the Mac by its LAN address.
+        URL(string: ProcessInfo.processInfo.environment["RAMBLE_API_URL"] ?? "http://localhost:8798")!
+        #endif
+    }()
+
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
+
+    private let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            if let date = ISO8601DateFormatter.flexible.date(from: raw) { return date }
+            if let date = ISO8601DateFormatter.plain.date(from: raw) { return date }
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Unrecognized date \(raw)")
+            )
+        }
+        return decoder
+    }()
+
+    private let encoder = JSONEncoder()
+
+    // MARK: - Session token
+
+    private var token: String? {
+        get { Keychain.read("session_token") }
+    }
+
+    func setToken(_ token: String?) {
+        if let token { Keychain.write(token, for: "session_token") }
+        else { Keychain.delete("session_token") }
+    }
+
+    var isSignedIn: Bool { token != nil }
+
+    // MARK: - Requests
+
+    private func request(
+        _ method: String,
+        _ path: String,
+        body: (any Encodable)? = nil,
+        authenticated: Bool = true
+    ) throws -> URLRequest {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = method
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try encoder.encode(AnyEncodable(body))
+        }
+        if authenticated {
+            guard let token else { throw APIError.notAuthenticated }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    private func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
+        let (data, response) = try await perform(request)
+        try check(response, data: data)
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decoding(String(describing: error))
+        }
+    }
+
+    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError
+            where [.notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+                   .timedOut, .dataNotAllowed].contains(error.code) {
+            throw APIError.offline
+        }
+    }
+
+    private func check(_ response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else { return }
+        guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 401 { throw APIError.notAuthenticated }
+            // Surface the server's own wording; it is written for users.
+            let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error
+                ?? "Request failed (\(http.statusCode))."
+            throw APIError.server(message)
+        }
+    }
+
+    private struct ErrorBody: Decodable { let error: String }
+
+    // MARK: - Health
+
+    func health() async throws -> HealthReport {
+        try await send(request("GET", "/v1/health", authenticated: false), as: HealthReport.self)
+    }
+
+    // MARK: - Auth
+
+    struct AuthResponse: Decodable {
+        let token: String
+        let user: Account
+    }
+
+    func register(email: String, password: String) async throws -> Account {
+        let body = ["email": email, "password": password, "device": UIDeviceName.current]
+        let response = try await send(
+            request("POST", "/v1/auth/register", body: body, authenticated: false),
+            as: AuthResponse.self
+        )
+        setToken(response.token)
+        return response.user
+    }
+
+    func login(email: String, password: String) async throws -> Account {
+        let body = ["email": email, "password": password, "device": UIDeviceName.current]
+        let response = try await send(
+            request("POST", "/v1/auth/login", body: body, authenticated: false),
+            as: AuthResponse.self
+        )
+        setToken(response.token)
+        return response.user
+    }
+
+    func logout() async {
+        if let request = try? request("POST", "/v1/auth/logout") {
+            _ = try? await perform(request)
+        }
+        setToken(nil)
+    }
+
+    func me() async throws -> Account {
+        try await send(request("GET", "/v1/me"), as: Account.self)
+    }
+
+    func updateProfile(_ profile: UserProfile?, onboarded: Bool? = nil) async throws -> Account {
+        struct Body: Encodable {
+            let profile: String?
+            let onboarded: Bool?
+        }
+        return try await send(
+            request("PATCH", "/v1/me", body: Body(profile: profile?.rawValue, onboarded: onboarded)),
+            as: Account.self
+        )
+    }
+
+    // MARK: - Rambles
+
+    struct CreateResponse: Decodable {
+        let id: String
+    }
+
+    func createRamble(
+        clientId: String,
+        recordedAt: Date,
+        duration: Double,
+        source: String
+    ) async throws -> String {
+        struct Body: Encodable {
+            let client_id: String
+            let recorded_at: String
+            let duration_seconds: Double
+            let source_device: String
+        }
+        let body = Body(
+            client_id: clientId,
+            recorded_at: ISO8601DateFormatter.plain.string(from: recordedAt),
+            duration_seconds: duration,
+            source_device: source
+        )
+        return try await send(request("POST", "/v1/rambles", body: body), as: CreateResponse.self).id
+    }
+
+    /// Uploads the recording as multipart form data.
+    func uploadAudio(rambleId: String, fileURL: URL) async throws {
+        guard let token else { throw APIError.notAuthenticated }
+        let boundary = "ramble.\(UUID().uuidString)"
+        var request = URLRequest(url: baseURL.appending(path: "/v1/rambles/\(rambleId)/audio"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        body.append("--\(boundary)\r\n")
+        body.append("Content-Disposition: form-data; name=\"audio\"; filename=\"\(fileURL.lastPathComponent)\"\r\n")
+        body.append("Content-Type: audio/m4a\r\n\r\n")
+        body.append(try Data(contentsOf: fileURL))
+        body.append("\r\n--\(boundary)--\r\n")
+
+        let (data, response) = try await perform({
+            var request = request
+            request.httpBody = body
+            return request
+        }())
+        try check(response, data: data)
+    }
+
+    struct TimelinePage: Decodable {
+        let rambles: [RambleCard]
+        let nextCursor: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case rambles
+            case nextCursor = "next_cursor"
+        }
+    }
+
+    func timeline(before: Date? = nil) async throws -> TimelinePage {
+        var path = "/v1/rambles?limit=30"
+        if let before { path += "&before=\(ISO8601DateFormatter.plain.string(from: before))" }
+        return try await send(request("GET", path), as: TimelinePage.self)
+    }
+
+    func ramble(id: String) async throws -> RambleDetail {
+        try await send(request("GET", "/v1/rambles/\(id)"), as: RambleDetail.self)
+    }
+
+    func deleteRamble(id: String) async throws {
+        let (data, response) = try await perform(request("DELETE", "/v1/rambles/\(id)"))
+        try check(response, data: data)
+    }
+
+    func reprocess(id: String) async throws {
+        let (data, response) = try await perform(request("POST", "/v1/rambles/\(id)/reprocess"))
+        try check(response, data: data)
+    }
+
+    // MARK: - Corrections
+
+    func updateItem(
+        id: String,
+        kind: ItemKind? = nil,
+        title: String? = nil,
+        status: String? = nil
+    ) async throws -> ExtractedItem {
+        struct Body: Encodable {
+            let kind: String?
+            let title: String?
+            let status: String?
+        }
+        return try await send(
+            request("PATCH", "/v1/items/\(id)",
+                    body: Body(kind: kind?.rawValue, title: title, status: status)),
+            as: ExtractedItem.self
+        )
+    }
+
+    func mergeEntity(_ id: String, into target: String) async throws {
+        struct Body: Encodable { let into_entity_id: String }
+        let (data, response) = try await perform(
+            request("POST", "/v1/entities/\(id)/merge", body: Body(into_entity_id: target))
+        )
+        try check(response, data: data)
+    }
+
+    // MARK: - Search
+
+    struct SearchResults: Decodable {
+        let hits: [SearchHit]
+    }
+
+    func search(_ query: String) async throws -> [SearchHit] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        return try await send(request("GET", "/v1/search?q=\(encoded)"), as: SearchResults.self).hits
+    }
+
+    func ask(_ question: String) async throws -> AskAnswer {
+        struct Body: Encodable { let question: String }
+        return try await send(
+            request("POST", "/v1/ask", body: Body(question: question)),
+            as: AskAnswer.self
+        )
+    }
+
+    func inbox() async throws -> Inbox {
+        try await send(request("GET", "/v1/inbox"), as: Inbox.self)
+    }
+
+    // MARK: - Entities
+
+    struct EntityList: Decodable { let entities: [EntitySummary] }
+
+    func entities(matching query: String? = nil) async throws -> [EntitySummary] {
+        var path = "/v1/entities?limit=100"
+        if let query, !query.isEmpty {
+            path += "&q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+        }
+        return try await send(request("GET", path), as: EntityList.self).entities
+    }
+
+    func entity(id: String) async throws -> EntityPage {
+        try await send(request("GET", "/v1/entities/\(id)"), as: EntityPage.self)
+    }
+
+    // MARK: - Actions
+
+    func confirmAction(id: String) async throws {
+        let (data, response) = try await perform(request("POST", "/v1/actions/\(id)/confirm"))
+        try check(response, data: data)
+    }
+
+    func cancelAction(id: String) async throws {
+        let (data, response) = try await perform(request("POST", "/v1/actions/\(id)/cancel"))
+        try check(response, data: data)
+    }
+
+    struct DeviceActionList: Decodable { let actions: [DeviceAction] }
+
+    func pendingDeviceActions() async throws -> [DeviceAction] {
+        try await send(request("GET", "/v1/actions/pending-device"), as: DeviceActionList.self).actions
+    }
+
+    func reportActionResult(id: String, success: Bool, result: [String: String], error: String?) async throws {
+        struct Body: Encodable {
+            let success: Bool
+            let result: [String: String]
+            let error: String?
+        }
+        let (data, response) = try await perform(
+            request("POST", "/v1/actions/\(id)/result",
+                    body: Body(success: success, result: result, error: error))
+        )
+        try check(response, data: data)
+    }
+
+    // MARK: - Integrations
+
+    struct IntegrationList: Decodable {
+        struct Item: Decodable, Identifiable, Hashable {
+            let provider: String
+            let name: String
+            let category: String
+            let connect: String
+            let available: Bool
+            let status: String
+            var id: String { provider }
+        }
+        let integrations: [Item]
+    }
+
+    func integrations() async throws -> [IntegrationList.Item] {
+        try await send(request("GET", "/v1/integrations"), as: IntegrationList.self).integrations
+    }
+
+    func connectIntegration(_ provider: String) async throws {
+        let (data, response) = try await perform(
+            request("POST", "/v1/integrations/\(provider)/connect")
+        )
+        try check(response, data: data)
+    }
+
+    func disconnectIntegration(_ provider: String) async throws {
+        let (data, response) = try await perform(request("DELETE", "/v1/integrations/\(provider)"))
+        try check(response, data: data)
+    }
+}
+
+// MARK: - Helpers
+
+/// Lets `request(body:)` accept any Encodable without a generic parameter.
+private struct AnyEncodable: Encodable {
+    private let encode: (Encoder) throws -> Void
+    init(_ wrapped: any Encodable) {
+        encode = wrapped.encode
+    }
+    func encode(to encoder: Encoder) throws { try encode(encoder) }
+}
+
+private extension Data {
+    mutating func append(_ string: String) {
+        if let data = string.data(using: .utf8) { append(data) }
+    }
+}
+
+enum UIDeviceName {
+    static var current: String {
+        #if os(iOS)
+        UIDevice.current.name
+        #else
+        "unknown"
+        #endif
+    }
+}
+
+#if canImport(UIKit)
+import UIKit
+#endif
