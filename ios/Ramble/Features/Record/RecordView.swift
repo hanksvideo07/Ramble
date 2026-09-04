@@ -26,6 +26,11 @@ struct RecordView: View {
 
                 if permissionDenied {
                     micDeniedState
+                } else if case .failed(let message) = recorder.state {
+                    // Audio is the source of truth, so a capture that never
+                    // started must say so loudly rather than sitting on
+                    // "Getting ready…" while the person talks to nothing.
+                    recordingFailedState(message)
                 } else {
                     Text(recorder.elapsed.durationLabel)
                         .font(Theme.Typography.timer)
@@ -45,7 +50,7 @@ struct RecordView: View {
 
                 Spacer()
 
-                if !permissionDenied {
+                if !permissionDenied, !isFailed {
                     stopButton
                         .padding(.bottom, 56)
                 }
@@ -93,6 +98,37 @@ struct RecordView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Stop recording")
+    }
+
+    private var isFailed: Bool {
+        if case .failed = recorder.state { return true }
+        return false
+    }
+
+    private func recordingFailedState(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(Theme.Palette.accent)
+            Text("Couldn't start recording")
+                .font(Theme.Typography.cardTitle)
+                .foregroundStyle(Theme.Palette.text)
+            Text(message)
+                .font(Theme.Typography.secondary)
+                .foregroundStyle(Theme.Palette.muted)
+                .multilineTextAlignment(.center)
+            Button("Try again") {
+                recorder.reset()
+                recorder.start()
+            }
+            .font(Theme.Typography.body.weight(.medium))
+            .foregroundStyle(Theme.Palette.accent)
+            .padding(.top, 4)
+            Button("Close") { dismiss() }
+                .font(Theme.Typography.secondary)
+                .foregroundStyle(Theme.Palette.muted)
+        }
+        .padding(.horizontal, 40)
     }
 
     private var micDeniedState: some View {

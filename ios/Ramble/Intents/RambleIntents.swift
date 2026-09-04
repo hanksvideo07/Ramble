@@ -75,6 +75,7 @@ final class DeepLink {
         case search
         case ask(String)
         case ramble(String)
+        case entity(String)
     }
 
     /// Consumed by the root view the next time it can act on it.
@@ -92,8 +93,8 @@ final class DeepLink {
         #endif
     }
 
-    /// Parses `ramble://record`, `ramble://search`, `ramble://ramble/<id>`,
-    /// and `ramble://ask?q=…`.
+    /// Parses `ramble://record`, `ramble://search`, `ramble://ask?q=…`,
+    /// `ramble://ramble/<id>`, and `ramble://entity/<id>`.
     func handle(_ url: URL) {
         guard url.scheme == "ramble" else { return }
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -108,8 +109,14 @@ final class DeepLink {
             pending = question.map { .ask($0) } ?? .search
         case "ramble":
             // ramble://ramble/<uuid>
-            let id = url.pathComponents.first { $0 != "/" }
-            if let id { pending = .ramble(id) }
+            if let id = url.pathComponents.first(where: { $0 != "/" }) {
+                pending = .ramble(id)
+            }
+        case "entity":
+            // ramble://entity/<uuid>
+            if let id = url.pathComponents.first(where: { $0 != "/" }) {
+                pending = .entity(id)
+            }
         default:
             break
         }

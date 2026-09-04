@@ -185,16 +185,35 @@ class MockUnderstandingProvider implements UnderstandingProvider {
     };
   }
 
-  /** Capitalized words that are not sentence-initial are treated as names. */
+  /**
+   * Runs of capitalized words are treated as names.
+   *
+   * The whole run is taken greedily so "Sarah Chen" stays one person rather
+   * than splitting into "Sarah" and "Chen". A name introduced by "at" or
+   * "from" ("talked to Sarah at Nationwide") reads as an organization;
+   * anything else reads as a person. This is a stand-in, not real extraction.
+   */
   private guessEntities(transcript: string): UnderstandingResult['entities'] {
     const found = new Map<string, UnderstandingResult['entities'][number]>();
-    const pattern = /(?<![.!?]\s)(?<!^)\b([A-Z][a-z]{2,})(?:\s+([A-Z][a-z]{2,}))?/gm;
+    const pattern = /(\b(?:at|from|with|for|to)\s+)?\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)/g;
+
     for (const match of transcript.matchAll(pattern)) {
-      const name = [match[1], match[2]].filter(Boolean).join(' ');
-      if (!name || STOP_WORDS.has(name)) continue;
+      const preposition = match[1]?.trim().toLowerCase();
+      if (!match[2]) continue;
+
+      // A run can start with a sentence-opening word ("Also I think we should
+      // ask Ben"), so trim stop words off each end rather than dropping the
+      // whole match.
+      let parts = match[2].split(/\s+/);
+      while (parts.length > 0 && STOP_WORDS.has(parts[0]!)) parts = parts.slice(1);
+      while (parts.length > 0 && STOP_WORDS.has(parts[parts.length - 1]!)) parts = parts.slice(0, -1);
+      if (parts.length === 0) continue;
+
+      const name = parts.join(' ');
       if (found.has(name)) continue;
+
       found.set(name, {
-        kind: match[2] ? 'person' : 'organization',
+        kind: preposition === 'at' || preposition === 'from' ? 'organization' : 'person',
         name,
         aliases: [],
         context: null,
@@ -230,6 +249,11 @@ const STOP_WORDS = new Set([
   'January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December',
   'Today', 'Tomorrow', 'Yesterday', 'Tonight', 'Morning', 'Afternoon', 'Evening',
+  // Verbs and adverbs that commonly open a spoken sentence, which would
+  // otherwise be captured as capitalized names.
+  'Remind', 'Send', 'Ask', 'Put', 'Call', 'Book', 'Finish', 'Change', 'Make',
+  'Take', 'Need', 'Should', 'Maybe', 'Just', 'Then', 'When', 'What', 'Where',
+  'Why', 'How', 'Who', 'Here', 'There', 'Some', 'Every', 'Another', 'Both',
 ]);
 
 function truncate(text: string, max: number): string {

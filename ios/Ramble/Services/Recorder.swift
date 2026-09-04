@@ -66,7 +66,9 @@ final class Recorder {
             let recorder = try AVAudioRecorder(url: url, settings: settings)
             recorder.isMeteringEnabled = true
             guard recorder.record() else {
-                state = .failed("Couldn't start recording.")
+                state = .failed(
+                    "The microphone didn't start. Another app may be using it."
+                )
                 return
             }
 

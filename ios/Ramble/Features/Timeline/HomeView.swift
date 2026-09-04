@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var showingSearch = false
     @State private var showingSettings = false
     @State private var selectedRamble: String?
+    @State private var selectedEntity: String?
     @State private var deepLink = DeepLink.shared
     /// Carries a question from an Ask intent or ramble://ask into the sheet.
     @State private var searchPrefill: String?
@@ -37,6 +38,9 @@ struct HomeView: View {
             .toolbarBackground(Theme.Palette.background, for: .navigationBar)
             .navigationDestination(item: $selectedRamble) { id in
                 RambleDetailView(rambleId: id)
+            }
+            .navigationDestination(item: $selectedEntity) { id in
+                EntityDetailView(entityId: id)
             }
         }
         .fullScreenCover(isPresented: $showingRecorder) {
@@ -67,6 +71,8 @@ struct HomeView: View {
                 showingSearch = true
             case .ramble(let id):
                 selectedRamble = id
+            case .entity(let id):
+                selectedEntity = id
             }
             deepLink.pending = nil
         }
