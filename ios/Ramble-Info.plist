@@ -24,5 +24,16 @@
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.ramble.Ramble</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ramble</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

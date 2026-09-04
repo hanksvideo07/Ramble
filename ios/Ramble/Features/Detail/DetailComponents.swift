@@ -12,11 +12,12 @@ struct ActionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: action.systemImage)
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.Palette.accent)
                     .frame(width: 20)
+                    .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(action.label)

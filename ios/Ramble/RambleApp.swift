@@ -10,6 +10,7 @@ struct RambleApp: App {
                 .environment(session)
                 .tint(Theme.Palette.accent)
                 .preferredColorScheme(nil) // follow the system
+                .onOpenURL { DeepLink.shared.handle($0) }
         }
     }
 }

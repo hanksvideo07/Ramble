@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var showingSearch = false
     @State private var showingSettings = false
     @State private var selectedRamble: String?
+    @State private var deepLink = DeepLink.shared
 
     var body: some View {
         NavigationStack {
@@ -45,6 +46,16 @@ struct HomeView: View {
         // A ramble that finishes uploading should appear without a pull.
         .onReceive(NotificationCenter.default.publisher(for: .rambleUploaded)) { _ in
             Task { await model.refresh() }
+        }
+        // Action Button, Shortcuts, and ramble:// links all arrive here.
+        .onChange(of: deepLink.pending, initial: true) { _, destination in
+            guard let destination else { return }
+            switch destination {
+            case .record: showingRecorder = true
+            case .search, .ask: showingSearch = true
+            case .ramble(let id): selectedRamble = id
+            }
+            deepLink.pending = nil
         }
     }
 
