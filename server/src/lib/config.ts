@@ -1,0 +1,92 @@
+import 'dotenv/config';
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var ${name}. See .env.example.`);
+  return value;
+}
+
+function optional(name: string, fallback = ''): string {
+  return process.env[name] ?? fallback;
+}
+
+function int(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) throw new Error(`Env var ${name} must be an integer, got "${raw}".`);
+  return parsed;
+}
+
+export const config = {
+  env: optional('NODE_ENV', 'development'),
+  port: int('PORT', 8787),
+  logLevel: optional('LOG_LEVEL', 'info'),
+
+  databaseUrl: required('DATABASE_URL'),
+
+  // A dev fallback keeps `npm run dev` working out of the box; production
+  // refuses to start without a real secret.
+  authSecret:
+    process.env.AUTH_SECRET ||
+    (process.env.NODE_ENV === 'production'
+      ? required('AUTH_SECRET')
+      : 'dev-only-insecure-secret'),
+
+  s3: {
+    endpoint: optional('S3_ENDPOINT', 'http://localhost:9010'),
+    region: optional('S3_REGION', 'us-east-1'),
+    bucket: optional('S3_BUCKET', 'ramble-audio'),
+    accessKeyId: optional('S3_ACCESS_KEY_ID', 'rambleminio'),
+    secretAccessKey: optional('S3_SECRET_ACCESS_KEY', 'rambleminio'),
+    forcePathStyle: optional('S3_FORCE_PATH_STYLE', 'true') === 'true',
+    signedUrlTtl: int('S3_SIGNED_URL_TTL', 3600),
+  },
+
+  anthropic: {
+    apiKey: optional('ANTHROPIC_API_KEY'),
+    understandingModel: optional('UNDERSTANDING_MODEL', 'claude-sonnet-5'),
+    answerModel: optional('ANSWER_MODEL', 'claude-sonnet-5'),
+  },
+
+  transcription: {
+    provider: optional('TRANSCRIPTION_PROVIDER', 'mock'),
+    deepgramKey: optional('DEEPGRAM_API_KEY'),
+    openaiKey: optional('OPENAI_API_KEY'),
+  },
+
+  embedding: {
+    provider: optional('EMBEDDING_PROVIDER', 'mock'),
+    model: optional('EMBEDDING_MODEL', 'text-embedding-3-small'),
+    dimension: int('EMBEDDING_DIMENSION', 1536),
+    openaiKey: optional('OPENAI_API_KEY'),
+  },
+
+  google: {
+    clientId: optional('GOOGLE_CLIENT_ID'),
+    clientSecret: optional('GOOGLE_CLIENT_SECRET'),
+    redirectUri: optional('GOOGLE_REDIRECT_URI'),
+  },
+
+  webhookSigningSecret: optional('WEBHOOK_SIGNING_SECRET', 'dev-webhook-secret'),
+} as const;
+
+/**
+ * Which capabilities are backed by a real provider. Surfaced at /v1/health and
+ * in the iOS settings screen so mocked behavior is never mistaken for real.
+ */
+export function capabilityReport() {
+  return {
+    understanding: config.anthropic.apiKey ? 'anthropic' : 'mock',
+    answering: config.anthropic.apiKey ? 'anthropic' : 'mock',
+    transcription:
+      config.transcription.provider === 'deepgram' && config.transcription.deepgramKey
+        ? 'deepgram'
+        : config.transcription.provider === 'openai' && config.transcription.openaiKey
+          ? 'openai'
+          : 'mock',
+    embedding:
+      config.embedding.provider === 'openai' && config.embedding.openaiKey ? 'openai' : 'mock',
+    calendar: 'apple_local+google_stub',
+  };
+}

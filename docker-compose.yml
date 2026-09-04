@@ -1,0 +1,39 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: ramble-db
+    environment:
+      POSTGRES_USER: ramble
+      POSTGRES_PASSWORD: ramble
+      POSTGRES_DB: ramble
+    ports:
+      - "5434:5432"
+    volumes:
+      - ramble-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ramble -d ramble"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  storage:
+    image: minio/minio:latest
+    container_name: ramble-storage
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: rambleminio
+      MINIO_ROOT_PASSWORD: rambleminio
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    volumes:
+      - ramble-storage-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ramble-db-data:
+  ramble-storage-data:
