@@ -57,8 +57,9 @@ final class RambleDetailModel {
         do {
             if approve {
                 try await APIClient.shared.confirmAction(id: action.id)
-                // Calendar and reminder actions run here on the device.
-                await DeviceActionRunner.shared.runPendingActions()
+                // The user just approved this, so prompting for calendar or
+                // reminders access now has obvious context.
+                await DeviceActionRunner.shared.runPendingActions(requestingAccess: true)
             } else {
                 try await APIClient.shared.cancelAction(id: action.id)
             }

@@ -28,6 +28,17 @@ final class Session {
         // reachable at all before we try to use a stored token.
         health = try? await APIClient.shared.health()
 
+        #if DEBUG
+        // Lets a local build be launched straight into the seeded account:
+        //   SIMCTL_CHILD_RAMBLE_DEMO_LOGIN=1 xcrun simctl launch <device> app.ramble.Ramble
+        if ProcessInfo.processInfo.environment["RAMBLE_DEMO_LOGIN"] == "1" {
+            await signIn(email: "demo@ramble.app", password: "rambledemo")
+            // If it failed, fall through to the normal path rather than
+            // leaving the app on the launch screen.
+            if phase != .loading { return }
+        }
+        #endif
+
         guard await APIClient.shared.isSignedIn else {
             phase = .signedOut
             return
@@ -56,6 +67,9 @@ final class Session {
             await afterSignIn()
         } catch {
             errorMessage = error.localizedDescription
+            // A failed sign-in from the launch path must still resolve to a
+            // screen the person can act on.
+            if phase == .loading { phase = .signedOut }
         }
     }
 

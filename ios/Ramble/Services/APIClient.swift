@@ -75,7 +75,7 @@ actor APIClient {
         body: (any Encodable)? = nil,
         authenticated: Bool = true
     ) throws -> URLRequest {
-        var request = URLRequest(url: baseURL.appending(path: path))
+        var request = URLRequest(url: try url(for: path))
         request.httpMethod = method
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -86,6 +86,26 @@ actor APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         return request
+    }
+
+    /// Builds an absolute URL from a path that may carry a query string.
+    ///
+    /// `URL.appending(path:)` percent-encodes its argument as a single path
+    /// component, which turns "?" into "%3F" and silently 404s every request
+    /// with a query. Splitting the two apart keeps the query a query.
+    private func url(for path: String) throws -> URL {
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        var components = URLComponents(
+            url: baseURL.appending(path: String(parts[0])),
+            resolvingAgainstBaseURL: false
+        )
+        if parts.count > 1, !parts[1].isEmpty {
+            components?.percentEncodedQuery = String(parts[1])
+        }
+        guard let url = components?.url else {
+            throw APIError.server("Could not build a request URL for \(path).")
+        }
+        return url
     }
 
     private func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
@@ -207,7 +227,7 @@ actor APIClient {
     func uploadAudio(rambleId: String, fileURL: URL) async throws {
         guard let token else { throw APIError.notAuthenticated }
         let boundary = "ramble.\(UUID().uuidString)"
-        var request = URLRequest(url: baseURL.appending(path: "/v1/rambles/\(rambleId)/audio"))
+        var request = URLRequest(url: try url(for: "/v1/rambles/\(rambleId)/audio"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

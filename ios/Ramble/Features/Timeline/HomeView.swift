@@ -16,6 +16,17 @@ struct HomeView: View {
             ZStack(alignment: .bottom) {
                 Theme.Palette.background.ignoresSafeArea()
                 timeline
+                // Fades the timeline out behind the floating button so text
+                // scrolling underneath it never becomes unreadable.
+                LinearGradient(
+                    colors: [Theme.Palette.background.opacity(0), Theme.Palette.background],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 140)
+                .allowsHitTesting(false)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea()
                 recordButton
             }
             .navigationTitle("")
@@ -52,6 +63,16 @@ struct HomeView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity)
                         .padding(.top, 80)
+                } else if model.days.isEmpty, let error = model.errorMessage {
+                    // A failed load is not an empty account. Saying "nothing
+                    // here yet" when the request failed would be a lie, and
+                    // would hide a real problem behind a friendly screen.
+                    EmptyStateView(
+                        title: "Couldn't load your rambles",
+                        message: error,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .padding(.top, 60)
                 } else if model.days.isEmpty {
                     EmptyStateView(
                         title: "Nothing here yet",

@@ -88,6 +88,20 @@ struct AuthView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 16)
 
+                #if DEBUG
+                // Local development only: fills in the account created by
+                // `npm run seed`, so the seeded timeline is one tap away.
+                Button("Use the demo account") {
+                    email = "demo@ramble.app"
+                    password = "rambledemo"
+                    submit()
+                }
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Palette.muted.opacity(0.7))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
+                #endif
+
                 Spacer()
                 Spacer()
             }

@@ -37,12 +37,20 @@ final class DeviceActionRunner {
     /// Pulls everything the server has approved for this device, runs it, and
     /// reports each outcome back. Failures are reported too, so an action never
     /// silently disappears.
-    func runPendingActions() async {
+    ///
+    /// `requestingAccess` decides whether a missing permission may raise a
+    /// system prompt. It is false for background sweeps — being asked for
+    /// calendar access the instant you sign in, before you have approved
+    /// anything, is exactly the kind of interruption this product should not
+    /// make. Those actions simply stay pending until the user grants access in
+    /// Settings or approves an action, where the prompt has obvious context.
+    func runPendingActions(requestingAccess: Bool = false) async {
         guard let actions = try? await APIClient.shared.pendingDeviceActions() else { return }
 
         for action in actions {
+            guard requestingAccess || hasAccess(for: action.type) else { continue }
             do {
-                let result = try await run(action)
+                let result = try await run(action, requestingAccess: requestingAccess)
                 try? await APIClient.shared.reportActionResult(
                     id: action.id, success: true, result: result, error: nil
                 )
@@ -55,21 +63,31 @@ final class DeviceActionRunner {
         }
     }
 
-    private func run(_ action: DeviceAction) async throws -> [String: String] {
+    /// Whether this action could run right now without prompting.
+    private func hasAccess(for type: String) -> Bool {
+        switch type {
+        case "calendar.create_event", "calendar.update_event": hasCalendarAccess
+        case "reminder.create": hasRemindersAccess
+        default: false
+        }
+    }
+
+    private func run(_ action: DeviceAction, requestingAccess: Bool) async throws -> [String: String] {
         switch action.type {
-        case "calendar.create_event": try await createEvent(action.parameters)
-        case "calendar.update_event": try await updateEvent(action.parameters)
-        case "reminder.create": try await createReminder(action.parameters)
+        case "calendar.create_event": try await createEvent(action.parameters, requestingAccess: requestingAccess)
+        case "calendar.update_event": try await updateEvent(action.parameters, requestingAccess: requestingAccess)
+        case "reminder.create": try await createReminder(action.parameters, requestingAccess: requestingAccess)
         default: throw DeviceActionError.unsupported(action.type)
         }
     }
 
     // MARK: - Calendar
 
-    private func createEvent(_ parameters: JSONValue) async throws -> [String: String] {
-        // `||` takes an autoclosure, which cannot await, so the request is
-        // made explicitly when access is not already granted.
-        let calendarAccess = hasCalendarAccess ? true : await requestCalendarAccess()
+    private func createEvent(_ parameters: JSONValue, requestingAccess: Bool) async throws -> [String: String] {
+        // `&&` takes an autoclosure, which cannot await, so the request is
+        // made in an explicit branch when access is not already granted.
+        var calendarAccess = hasCalendarAccess
+        if !calendarAccess, requestingAccess { calendarAccess = await requestCalendarAccess() }
         guard calendarAccess else { throw DeviceActionError.noAccess("Calendar") }
         guard let calendar = store.defaultCalendarForNewEvents else {
             throw DeviceActionError.noCalendar
@@ -98,8 +116,9 @@ final class DeviceActionRunner {
         return ["event_id": event.eventIdentifier ?? "", "starts_at": ISO8601DateFormatter.plain.string(from: start)]
     }
 
-    private func updateEvent(_ parameters: JSONValue) async throws -> [String: String] {
-        let calendarAccess = hasCalendarAccess ? true : await requestCalendarAccess()
+    private func updateEvent(_ parameters: JSONValue, requestingAccess: Bool) async throws -> [String: String] {
+        var calendarAccess = hasCalendarAccess
+        if !calendarAccess, requestingAccess { calendarAccess = await requestCalendarAccess() }
         guard calendarAccess else { throw DeviceActionError.noAccess("Calendar") }
         guard let id = parameters["event_id"]?.stringValue,
               let event = store.event(withIdentifier: id)
@@ -119,8 +138,9 @@ final class DeviceActionRunner {
 
     // MARK: - Reminders
 
-    private func createReminder(_ parameters: JSONValue) async throws -> [String: String] {
-        let remindersAccess = hasRemindersAccess ? true : await requestRemindersAccess()
+    private func createReminder(_ parameters: JSONValue, requestingAccess: Bool) async throws -> [String: String] {
+        var remindersAccess = hasRemindersAccess
+        if !remindersAccess, requestingAccess { remindersAccess = await requestRemindersAccess() }
         guard remindersAccess else { throw DeviceActionError.noAccess("Reminders") }
         guard let list = store.defaultCalendarForNewReminders() else {
             throw DeviceActionError.noCalendar

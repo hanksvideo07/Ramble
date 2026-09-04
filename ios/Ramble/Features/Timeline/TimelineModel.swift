@@ -58,7 +58,7 @@ final class TimelineModel {
             regroup()
             schedulePollIfNeeded()
         } catch APIError.notAuthenticated {
-            errorMessage = nil
+            errorMessage = "Your session expired. Sign in again."
         } catch {
             errorMessage = error.localizedDescription
         }
