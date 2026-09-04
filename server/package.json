@@ -10,7 +10,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/db/seed.ts",
     "worker": "tsx src/pipeline/worker.ts",
-    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

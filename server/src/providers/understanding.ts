@@ -222,7 +222,15 @@ class MockUnderstandingProvider implements UnderstandingProvider {
   }
 }
 
-const STOP_WORDS = new Set(['The', 'They', 'And', 'But', 'Also', 'Oh', 'She', 'His', 'Her']);
+// Capitalized words that are never entities. Days and months matter most:
+// "Friday" and "Thursday" appear constantly in spoken plans.
+const STOP_WORDS = new Set([
+  'The', 'They', 'And', 'But', 'Also', 'Oh', 'She', 'His', 'Her', 'Their', 'This', 'That',
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+  'January', 'February', 'March', 'April', 'May', 'June', 'July',
+  'August', 'September', 'October', 'November', 'December',
+  'Today', 'Tomorrow', 'Yesterday', 'Tonight', 'Morning', 'Afternoon', 'Evening',
+]);
 
 function truncate(text: string, max: number): string {
   const clean = text.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '');
