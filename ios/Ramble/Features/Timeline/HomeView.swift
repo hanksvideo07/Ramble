@@ -11,6 +11,8 @@ struct HomeView: View {
     @State private var showingSettings = false
     @State private var selectedRamble: String?
     @State private var deepLink = DeepLink.shared
+    /// Carries a question from an Ask intent or ramble://ask into the sheet.
+    @State private var searchPrefill: String?
 
     var body: some View {
         NavigationStack {
@@ -40,7 +42,9 @@ struct HomeView: View {
         .fullScreenCover(isPresented: $showingRecorder) {
             RecordView { CaptureQueue.shared.sync(); Task { await model.refresh() } }
         }
-        .sheet(isPresented: $showingSearch) { SearchView() }
+        .sheet(isPresented: $showingSearch) {
+            SearchView(initialQuery: searchPrefill)
+        }
         .sheet(isPresented: $showingSettings) { SettingsView() }
         .task { await model.load() }
         // A ramble that finishes uploading should appear without a pull.
@@ -51,9 +55,18 @@ struct HomeView: View {
         .onChange(of: deepLink.pending, initial: true) { _, destination in
             guard let destination else { return }
             switch destination {
-            case .record: showingRecorder = true
-            case .search, .ask: showingSearch = true
-            case .ramble(let id): selectedRamble = id
+            case .record:
+                showingRecorder = true
+            case .search:
+                searchPrefill = nil
+                showingSearch = true
+            case .ask(let question):
+                // Ask intents carry the question; dropping it would leave the
+                // person retyping what they just said.
+                searchPrefill = question
+                showingSearch = true
+            case .ramble(let id):
+                selectedRamble = id
             }
             deepLink.pending = nil
         }

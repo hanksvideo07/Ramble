@@ -6,6 +6,10 @@ import SwiftUI
 /// making the person choose a mode, the screen offers both and lets the shape
 /// of what they typed decide which is offered first.
 struct SearchView: View {
+    /// A question supplied by an Ask intent or a ramble://ask link. When
+    /// present it runs immediately rather than waiting to be typed.
+    var initialQuery: String?
+
     @Environment(\.dismiss) private var dismiss
     @State private var model = SearchModel()
     @FocusState private var focused: Bool
@@ -69,7 +73,14 @@ struct SearchView: View {
             }
             .navigationDestination(for: String.self) { RambleDetailView(rambleId: $0) }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            if let initialQuery, !initialQuery.isEmpty {
+                model.query = initialQuery
+                model.run()
+            } else {
+                focused = true
+            }
+        }
     }
 
     private var searchField: some View {
