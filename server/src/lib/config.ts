@@ -76,6 +76,43 @@ export const config = {
      * returns empty content.
      */
     understandingModel: optional('UNDERSTANDING_MODEL', 'nvidia/nemotron-3-nano-30b-a3b'),
+
+    /**
+     * Routing policy applied to every request.
+     *
+     * This app sends people's unedited private thoughts to a third party, so
+     * where that goes and what happens to it afterwards is a product
+     * requirement, not a preference.
+     */
+    routing: {
+      /**
+       * Only route to providers that do not store or train on prompts.
+       * OpenRouter enforces this itself and will fail the request rather than
+       * fall back to a provider that retains data.
+       */
+      denyDataCollection: optional('OPENROUTER_DENY_DATA_COLLECTION', 'true') === 'true',
+
+      /**
+       * Providers excluded on geography. Derived from OpenRouter's own
+       * provider metadata — headquarters in CN, or any datacenter in CN —
+       * rather than guessed. Re-derive with `npm run providers:audit`, which
+       * fails if this list has drifted from what OpenRouter reports.
+       */
+      ignoredProviders: optional(
+        'OPENROUTER_IGNORED_PROVIDERS',
+        'streamlake,alibaba,baidu,deepseek,tencent,xiaomi,nex-agi',
+      )
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean),
+
+      /**
+       * Refuse providers that do not implement every parameter sent. Several
+       * endpoints serve the same model without structured-output support, and
+       * silently landing on one degrades extraction rather than failing it.
+       */
+      requireParameters: optional('OPENROUTER_REQUIRE_PARAMETERS', 'true') === 'true',
+    },
     // Answering only summarizes excerpts that were already retrieved, so it
     // cannot trigger an action and can run on the same cheap model.
     answerModel: optional('ANSWER_MODEL', 'nvidia/nemotron-3-nano-30b-a3b'),

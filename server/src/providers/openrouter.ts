@@ -44,6 +44,16 @@ export async function chat(request: ChatRequest): Promise<string> {
     temperature: request.temperature ?? 0,
   };
 
+  // Applied to every request: where this goes, and what may be done with it
+  // afterwards, is not left to whichever provider happens to be cheapest.
+  const routing: Record<string, unknown> = {};
+  if (config.openrouter.routing.denyDataCollection) routing.data_collection = 'deny';
+  if (config.openrouter.routing.requireParameters) routing.require_parameters = true;
+  if (config.openrouter.routing.ignoredProviders.length > 0) {
+    routing.ignore = config.openrouter.routing.ignoredProviders;
+  }
+  if (Object.keys(routing).length > 0) body.provider = routing;
+
   if (request.jsonSchema) {
     // strict:false keeps this portable. OpenAI's strict mode requires every
     // property to be required with additionalProperties:false, which most
@@ -80,8 +90,10 @@ export async function chat(request: ChatRequest): Promise<string> {
       prompt_tokens: number;
       completion_tokens: number;
       completion_tokens_details?: { reasoning_tokens?: number };
+      cost?: number;
     };
     model?: string;
+    provider?: string;
   };
 
   const choice = payload.choices?.[0];
@@ -104,10 +116,14 @@ export async function chat(request: ChatRequest): Promise<string> {
 
   if (!content) throw new OpenRouterError(502, 'OpenRouter returned no message content.');
 
-  log.debug('openrouter.usage', {
+  log.info('openrouter.usage', {
     model: payload.model,
+    // Recorded so the routing policy can be checked against reality rather
+    // than assumed to be working.
+    provider: payload.provider,
     prompt_tokens: payload.usage?.prompt_tokens,
     completion_tokens: payload.usage?.completion_tokens,
+    cost: payload.usage?.cost,
   });
 
   return content;

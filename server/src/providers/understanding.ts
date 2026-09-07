@@ -44,9 +44,11 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
       ],
       jsonSchema: { name: 'record_understanding', schema: understandingJsonSchema },
       // Extraction emits a lot of JSON, and a reasoning model spends a large
-      // share of its budget thinking before any of it appears. Too small a
-      // budget truncates mid-object, which reads as a parse failure.
-      maxTokens: 16_384,
+      // share of its budget thinking before any of it appears — measured at
+      // roughly 3,000 reasoning tokens for a short transcript. Billing is per
+      // token generated rather than per token budgeted, so a high ceiling is
+      // free insurance against a long ramble truncating mid-object.
+      maxTokens: 32_768,
     });
 
     const parsed = this.validate(first);
@@ -71,7 +73,7 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
         },
       ],
       jsonSchema: { name: 'record_understanding', schema: understandingJsonSchema },
-      maxTokens: 16_384,
+      maxTokens: 32_768,
     });
 
     const second = this.validate(repaired);
