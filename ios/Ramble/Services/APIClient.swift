@@ -21,15 +21,19 @@ enum APIError: LocalizedError {
 actor APIClient {
     static let shared = APIClient()
 
-    /// Points at the local server in development. A release build would read
-    /// this from the build configuration instead.
+    /// Where the backend lives.
+    ///
+    /// Defaults to the deployed server so a physical device works with no
+    /// setup. Set `RAMBLE_API_URL` in the scheme's environment to point a
+    /// build at a local server instead.
+    static let deployedURL = "https://ramble-api-production.up.railway.app"
+
     private let baseURL: URL = {
-        #if targetEnvironment(simulator)
-        URL(string: "http://localhost:8798")!
-        #else
-        // A device on the same network reaches the Mac by its LAN address.
-        URL(string: ProcessInfo.processInfo.environment["RAMBLE_API_URL"] ?? "http://localhost:8798")!
-        #endif
+        if let override = ProcessInfo.processInfo.environment["RAMBLE_API_URL"],
+           let url = URL(string: override) {
+            return url
+        }
+        return URL(string: deployedURL)!
     }()
 
     private let session: URLSession = {

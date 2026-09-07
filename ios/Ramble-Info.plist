@@ -17,8 +17,8 @@
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Development only: the local server runs over plain HTTP on localhost.
-		     Production builds talk to an HTTPS host and this exception does not apply. -->
+		<!-- The deployed server is HTTPS. This exception only matters when
+		     RAMBLE_API_URL points the build at a local http:// server. -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>

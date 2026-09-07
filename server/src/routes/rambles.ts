@@ -4,12 +4,41 @@ import { pool, withTransaction } from '../db/pool.ts';
 import { HttpError, requireUser } from '../lib/auth.ts';
 import { track } from '../lib/analytics.ts';
 import { log } from '../lib/logger.ts';
-import { audioKey, putAudio, signedPlaybackUrl } from '../lib/storage.ts';
+import { audioKey, getAudio, putAudio, signedPlaybackUrl, verifyKeySignature } from '../lib/storage.ts';
 import { emitWebhook } from '../integrations/webhooks.ts';
 import { enqueue } from '../pipeline/queue.ts';
 import { mergeEntities } from '../pipeline/entities.ts';
 
 export async function rambleRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Serves audio for a filesystem-backed deployment.
+   *
+   * Deliberately unauthenticated in the header sense: a media player cannot
+   * attach a bearer token, so the capability lives in the signed URL, which is
+   * scoped to one object and expires. An unsigned or stale request gets
+   * nothing.
+   */
+  app.get('/v1/audio', async (request, reply) => {
+    const query = z
+      .object({ key: z.string().min(1), expires: z.coerce.number(), sig: z.string().min(1) })
+      .parse(request.query);
+
+    if (!verifyKeySignature(query.key, query.expires, query.sig)) {
+      throw new HttpError(403, 'This playback link is invalid or has expired.');
+    }
+
+    try {
+      const audio = await getAudio(query.key);
+      return reply
+        .header('Content-Type', query.key.endsWith('.wav') ? 'audio/wav' : 'audio/mp4')
+        .header('Cache-Control', 'private, max-age=3600')
+        .header('Accept-Ranges', 'none')
+        .send(audio);
+    } catch {
+      throw new HttpError(404, 'That recording is no longer available.');
+    }
+  });
+
   /**
    * Registers a capture. The device calls this immediately on stop — before
    * the audio finishes uploading — so an offline recording still has a real

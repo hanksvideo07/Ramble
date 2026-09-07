@@ -25,6 +25,24 @@ export const config = {
 
   databaseUrl: required('DATABASE_URL'),
 
+  /**
+   * Absolute URL this server is reachable at. Used to build audio playback
+   * links, which must be absolute because the player fetches them directly.
+   * Railway supplies the public domain at runtime.
+   */
+  publicUrl:
+    process.env.PUBLIC_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '') ||
+    `http://localhost:${int('PORT', 8787)}`,
+
+  storage: {
+    /**
+     * When set, audio is stored in this directory instead of S3. Intended for
+     * a deployment with a persistent volume and no object store.
+     */
+    directory: optional('AUDIO_DIR'),
+  },
+
   // A dev fallback keeps `npm run dev` working out of the box; production
   // refuses to start without a real secret.
   authSecret:
