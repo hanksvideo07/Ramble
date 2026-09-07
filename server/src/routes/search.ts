@@ -9,6 +9,39 @@ import { createAnswerProvider } from '../providers/answer.ts';
 const answerProvider = createAnswerProvider();
 
 export async function searchRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Search with a query vector embedded on the device.
+   *
+   * A POST rather than a GET because a 512-float vector does not belong in a
+   * query string. The text is still sent: lexical and structured search need
+   * the words, and the vector only drives the semantic third.
+   */
+  app.post('/v1/search', async (request) => {
+    const user = await requireUser(request);
+    const body = z
+      .object({
+        q: z.string().min(1).max(500),
+        limit: z.number().min(1).max(50).default(20),
+        kinds: z.array(z.string()).optional(),
+        entity_id: z.string().uuid().optional(),
+        vector: z.array(z.number()).optional(),
+      })
+      .parse(request.body);
+
+    const hits = await hybridSearch(user.id, body.q, {
+      limit: body.limit,
+      kinds: body.kinds,
+      entityId: body.entity_id,
+      queryVector: body.vector,
+    });
+
+    await track(user.id, 'search_performed', {
+      result_count: hits.length,
+      semantic: body.vector != null,
+    });
+    return { query: body.q, hits };
+  });
+
   app.get('/v1/search', async (request) => {
     const user = await requireUser(request);
     const query = z
@@ -38,11 +71,17 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post('/v1/ask', async (request) => {
     const user = await requireUser(request);
-    const body = z.object({ question: z.string().min(1).max(1000) }).parse(request.body);
+    const body = z
+      .object({
+        question: z.string().min(1).max(1000),
+        vector: z.array(z.number()).optional(),
+      })
+      .parse(request.body);
 
     const hits = await hybridSearch(user.id, body.question, {
       limit: 12,
       kinds: inferKinds(body.question),
+      queryVector: body.vector,
     });
 
     const result = await answerProvider.answer(

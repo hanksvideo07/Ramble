@@ -104,5 +104,16 @@ final class Session {
         // Anything recorded while signed out or offline can now be sent.
         CaptureQueue.shared.sync()
         await DeviceActionRunner.shared.runPendingActions()
+        // Fills in vectors for anything extracted while this device was away.
+        EmbeddingSync.shared.sync()
+
+        // Downloading the transcription model can take a while and needs a
+        // connection, so it is started now rather than when the user is
+        // standing there having just stopped a recording.
+        if #available(iOS 26.0, *) {
+            Task.detached(priority: .utility) {
+                try? await OnDeviceTranscriber.prepare()
+            }
+        }
     }
 }

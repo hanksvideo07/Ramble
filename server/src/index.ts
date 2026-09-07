@@ -12,6 +12,7 @@ import { deliverPendingWebhooks } from './integrations/webhooks.ts';
 import { queueDepth, recoverStuck } from './pipeline/queue.ts';
 import { actionRoutes } from './routes/actions.ts';
 import { authRoutes } from './routes/auth.ts';
+import { embeddingRoutes } from './routes/embeddings.ts';
 import { entityRoutes } from './routes/entities.ts';
 import { integrationRoutes } from './routes/integrations.ts';
 import { rambleRoutes } from './routes/rambles.ts';
@@ -63,6 +64,7 @@ export async function buildServer() {
   await app.register(entityRoutes);
   await app.register(actionRoutes);
   await app.register(integrationRoutes);
+  await app.register(embeddingRoutes);
 
   return app;
 }

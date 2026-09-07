@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
-import { pool, registerVectorParser, withTransaction } from '../src/db/pool.ts';
+import { pool, registerVectorParser, toVectorLiteral, withTransaction } from '../src/db/pool.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { hashPassword } from '../src/lib/auth.ts';
 import { audioKey, ensureBucket, putAudio } from '../src/lib/storage.ts';
-import { processRamble } from '../src/pipeline/process.ts';
+import { embedding, processRamble } from '../src/pipeline/process.ts';
 import { hybridSearch } from '../src/pipeline/search.ts';
 import { mergeEntities, resolveEntity } from '../src/pipeline/entities.ts';
 
@@ -359,7 +359,27 @@ describe('hybrid search', () => {
     assert.ok(hits.some((h) => h.matchedBy.includes('lexical')));
   });
 
-  it('ranks decisions first when asked what was decided', async () => {
+  it('leaves vectors for the device to fill in', async () => {
+    const userId = await createUser();
+    const rambleId = await createTranscribedRamble(
+      userId,
+      'We decided to lead with implementation speed instead of price.',
+    );
+    await processRamble(rambleId);
+
+    // With on-device embeddings the server indexes what should be searchable
+    // but stores no vector, so the device has something to claim.
+    const { rows } = await pool.query<{ total: string; pending: string }>(
+      `SELECT COUNT(*)::text AS total,
+              COUNT(*) FILTER (WHERE embedding IS NULL)::text AS pending
+         FROM embedding_records WHERE ramble_id = $1`,
+      [rambleId],
+    );
+    assert.ok(Number(rows[0]!.total) > 0, 'units should still be indexed');
+    assert.equal(rows[0]!.total, rows[0]!.pending, 'every vector should await the device');
+  });
+
+  it('finds a paraphrase once the device has supplied vectors', async () => {
     const userId = await createUser();
     const rambleId = await createTranscribedRamble(
       userId,
@@ -368,8 +388,24 @@ describe('hybrid search', () => {
     );
     await processRamble(rambleId);
 
-    const hits = await hybridSearch(userId, 'What did I decide about positioning?');
-    assert.ok(hits.length > 0, 'expected results');
+    // A paraphrase shares no searchable words with the transcript, so lexical
+    // and structured search cannot reach it. This is precisely the case
+    // semantic search exists for.
+    const before = await hybridSearch(userId, 'What did I decide about positioning?');
+    assert.equal(before.length, 0, 'no vectors yet, so a paraphrase finds nothing');
+
+    await fillVectorsAsDeviceWould(userId, rambleId);
+
+    const queryVector = await embedAsDeviceWould('What did I decide about positioning?');
+    const after = await hybridSearch(userId, 'What did I decide about positioning?', {
+      queryVector,
+    });
+
+    assert.ok(after.length > 0, 'the device-supplied vectors should make it findable');
+    assert.ok(
+      after.some((hit) => hit.matchedBy.includes('semantic')),
+      'the match should come from semantic search',
+    );
   });
 
   it('returns nothing rather than noise for an unrelated query', async () => {
@@ -383,6 +419,36 @@ describe('hybrid search', () => {
     assert.ok(hits.every((h) => h.rambleId === rambleId));
   });
 });
+
+/**
+ * Stands in for the phone: embeds with the same provider the server would use
+ * as a fallback, at the configured width, and writes the vectors back exactly
+ * as POST /v1/embeddings does.
+ */
+async function fillVectorsAsDeviceWould(userId: string, rambleId: string): Promise<void> {
+  const { rows } = await pool.query<{ id: string; content: string }>(
+    `SELECT id, content FROM embedding_records
+      WHERE ramble_id = $1 AND embedding IS NULL`,
+    [rambleId],
+  );
+  const vectors = await embedding.embed(rows.map((r) => r.content));
+
+  for (const [index, row] of rows.entries()) {
+    const vector = vectors[index];
+    if (!vector) continue;
+    await pool.query(
+      `UPDATE embedding_records SET embedding = $3::vector, model_revision = 1
+        WHERE id = $1 AND user_id = $2`,
+      [row.id, userId, toVectorLiteral(vector)],
+    );
+  }
+}
+
+async function embedAsDeviceWould(text: string): Promise<number[]> {
+  const [vector] = await embedding.embed([text]);
+  if (!vector) throw new Error('Test embedder produced no vector.');
+  return vector;
+}
 
 async function countRows(rambleId: string): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};

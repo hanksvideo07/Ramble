@@ -99,12 +99,22 @@ final class CaptureQueue {
                     update(capture.id) { $0.rambleId = rambleId }
                 }
 
+                // Transcribe before deleting the audio, since this is the
+                // only moment the file is guaranteed to still be here. A
+                // failure is not fatal — the server can transcribe instead —
+                // so it never blocks the upload.
+                await transcribeOnDevice(capture: capture, rambleId: rambleId)
+
                 try await APIClient.shared.uploadAudio(rambleId: rambleId, fileURL: capture.fileURL)
 
                 // Only now is the local copy redundant.
                 try? FileManager.default.removeItem(at: capture.fileURL)
                 remove(capture.id)
                 NotificationCenter.default.post(name: .rambleUploaded, object: rambleId)
+
+                // Newly extracted items need vectors before semantic search
+                // can find them.
+                EmbeddingSync.shared.sync()
             } catch APIError.offline {
                 isOnline = false
                 update(capture.id) { $0.lastError = "Waiting for a connection" }
@@ -120,6 +130,37 @@ final class CaptureQueue {
                     $0.lastError = error.localizedDescription
                 }
             }
+        }
+    }
+
+    /// Transcribes on the device and sends the result up.
+    ///
+    /// Doing this here rather than at capture time means it also covers a
+    /// recording made offline days ago, and keeps the record screen free to
+    /// dismiss the instant the user stops.
+    private func transcribeOnDevice(capture: PendingCapture, rambleId: String) async {
+        guard #available(iOS 26.0, *) else { return }
+        guard await OnDeviceTranscriber.isReady() else { return }
+
+        do {
+            let transcript = try await OnDeviceTranscriber.shared.transcribe(fileURL: capture.fileURL)
+            try await APIClient.shared.uploadTranscript(
+                rambleId: rambleId,
+                text: transcript.text,
+                locale: transcript.locale,
+                segments: transcript.segments.map {
+                    OnDeviceTranscriptSegment(
+                        index: $0.index,
+                        startSeconds: $0.startSeconds,
+                        endSeconds: $0.endSeconds,
+                        text: $0.text
+                    )
+                }
+            )
+        } catch {
+            // The server still has the audio and its own providers, so a
+            // failure here costs quality, not the recording.
+            print("[CaptureQueue] On-device transcription failed: \(error.localizedDescription)")
         }
     }
 

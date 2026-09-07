@@ -309,21 +309,103 @@ actor APIClient {
         try check(response, data: data)
     }
 
+    /// Sends a transcript produced on the device, so the server does not pay a
+    /// cloud service to redo work the phone already did.
+    func uploadTranscript(
+        rambleId: String,
+        text: String,
+        locale: String,
+        segments: [OnDeviceTranscriptSegment]
+    ) async throws {
+        struct Body: Encodable {
+            let text: String
+            let locale: String
+            let segments: [OnDeviceTranscriptSegment]
+        }
+        let (data, response) = try await perform(
+            request("POST", "/v1/rambles/\(rambleId)/transcript",
+                    body: Body(text: text, locale: locale, segments: segments))
+        )
+        try check(response, data: data)
+    }
+
+    // MARK: - On-device embeddings
+
+    struct PendingEmbeddings: Decodable {
+        struct Unit: Decodable, Identifiable {
+            let id: String
+            let content: String
+        }
+        let units: [Unit]
+        let dimension: Int
+        let expectedRevision: Int
+
+        enum CodingKeys: String, CodingKey {
+            case units, dimension
+            case expectedRevision = "expected_revision"
+        }
+    }
+
+    func pendingEmbeddings(limit: Int = 25) async throws -> PendingEmbeddings {
+        try await send(request("GET", "/v1/embeddings/pending?limit=\(limit)"), as: PendingEmbeddings.self)
+    }
+
+    func uploadEmbeddings(vectors: [(id: String, vector: [Float])], revision: Int) async throws {
+        struct Entry: Encodable {
+            let id: String
+            let vector: [Float]
+        }
+        struct Body: Encodable {
+            let revision: Int
+            let vectors: [Entry]
+        }
+        let body = Body(revision: revision, vectors: vectors.map { Entry(id: $0.id, vector: $0.vector) })
+        let (data, response) = try await perform(request("POST", "/v1/embeddings", body: body))
+        try check(response, data: data)
+    }
+
+    struct HandshakeResult: Decodable {
+        let ok: Bool
+        let reindexing: Int
+    }
+
+    func embeddingHandshake(dimension: Int, revision: Int) async throws -> HandshakeResult {
+        struct Body: Encodable {
+            let dimension: Int
+            let revision: Int
+        }
+        return try await send(
+            request("POST", "/v1/embeddings/handshake", body: Body(dimension: dimension, revision: revision)),
+            as: HandshakeResult.self
+        )
+    }
+
     // MARK: - Search
 
     struct SearchResults: Decodable {
         let hits: [SearchHit]
     }
 
-    func search(_ query: String) async throws -> [SearchHit] {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        return try await send(request("GET", "/v1/search?q=\(encoded)"), as: SearchResults.self).hits
+    /// `vector` is the query embedded on this device. Without it the server
+    /// falls back to lexical and structured search only.
+    func search(_ query: String, vector: [Float]? = nil) async throws -> [SearchHit] {
+        struct Body: Encodable {
+            let q: String
+            let vector: [Float]?
+        }
+        return try await send(
+            request("POST", "/v1/search", body: Body(q: query, vector: vector)),
+            as: SearchResults.self
+        ).hits
     }
 
-    func ask(_ question: String) async throws -> AskAnswer {
-        struct Body: Encodable { let question: String }
+    func ask(_ question: String, vector: [Float]? = nil) async throws -> AskAnswer {
+        struct Body: Encodable {
+            let question: String
+            let vector: [Float]?
+        }
         return try await send(
-            request("POST", "/v1/ask", body: Body(question: question)),
+            request("POST", "/v1/ask", body: Body(question: question, vector: vector)),
             as: AskAnswer.self
         )
     }

@@ -136,6 +136,80 @@ export async function rambleRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(202).send({ id, processing_state: 'uploaded' });
   });
 
+  /**
+   * Stores a transcript produced on the device.
+   *
+   * Posted before or alongside the audio. When present, the pipeline skips its
+   * own transcription entirely — there is no reason to pay a cloud service to
+   * redo work the phone already did for free.
+   */
+  app.post('/v1/rambles/:id/transcript', async (request, reply) => {
+    const user = await requireUser(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        text: z.string().min(1),
+        locale: z.string().max(20).optional(),
+        segments: z
+          .array(
+            z.object({
+              index: z.number().int().min(0),
+              startSeconds: z.number().min(0),
+              endSeconds: z.number().min(0),
+              text: z.string(),
+            }),
+          )
+          .min(1),
+      })
+      .parse(request.body);
+
+    const owned = await pool.query(`SELECT id FROM rambles WHERE id = $1 AND user_id = $2`, [
+      id,
+      user.id,
+    ]);
+    if (owned.rowCount === 0) throw new HttpError(404, 'Ramble not found.');
+
+    await withTransaction(async (client) => {
+      // Replace any earlier device transcript for this ramble, so a retried
+      // upload does not accumulate duplicates.
+      await client.query(`DELETE FROM transcripts WHERE ramble_id = $1 AND origin = 'device'`, [id]);
+
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO transcripts (ramble_id, user_id, provider, model, raw_text, language, origin)
+         VALUES ($1, $2, 'apple.speech_analyzer', 'on-device', $3, $4, 'device')
+         RETURNING id`,
+        [id, user.id, body.text, body.locale ?? null],
+      );
+      const transcriptId = rows[0]!.id;
+
+      for (const segment of body.segments) {
+        await client.query(
+          `INSERT INTO transcript_segments
+             (transcript_id, ramble_id, user_id, idx, start_seconds, end_seconds, text)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            transcriptId,
+            id,
+            user.id,
+            segment.index,
+            segment.startSeconds,
+            segment.endSeconds,
+            segment.text,
+          ],
+        );
+      }
+
+      await client.query(
+        `UPDATE rambles SET processing_state = 'transcribed', language = $2 WHERE id = $1`,
+        [id, body.locale ?? null],
+      );
+    });
+
+    await track(user.id, 'transcript_received', { source: 'device', segments: body.segments.length });
+    enqueue(id);
+    return reply.code(202).send({ id, processing_state: 'transcribed' });
+  });
+
   /** The timeline. Cursor-paginated by recorded_at. */
   app.get('/v1/rambles', async (request) => {
     const user = await requireUser(request);

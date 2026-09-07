@@ -473,3 +473,12 @@ struct HealthReport: Codable {
     /// UI can say so instead of passing off sample output as real.
     var isUsingMockUnderstanding: Bool { capabilities["understanding"] == "mock" }
 }
+
+/// One timed span of a transcript produced on the device. Mirrors the shape
+/// the server's transcript endpoint expects.
+struct OnDeviceTranscriptSegment: Codable, Sendable {
+    let index: Int
+    let startSeconds: Double
+    let endSeconds: Double
+    let text: String
+}

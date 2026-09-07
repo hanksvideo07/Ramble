@@ -67,7 +67,10 @@ final class SearchModel {
         isWorking = true
         defer { isWorking = false }
         do {
-            let results = try await APIClient.shared.search(current)
+            // Embedded here, with the same model that embedded everything it
+            // will be compared against.
+            let vector = await EmbeddingSync.shared.embedQuery(current)
+            let results = try await APIClient.shared.search(current, vector: vector)
             // Discard a response whose query the user has already moved past.
             guard current == query else { return }
             hits = results
@@ -84,11 +87,12 @@ final class SearchModel {
         isWorking = true
         defer { isWorking = false }
         do {
-            let result = try await APIClient.shared.ask(current)
+            let vector = await EmbeddingSync.shared.embedQuery(current)
+            let result = try await APIClient.shared.ask(current, vector: vector)
             guard current == query else { return }
             answer = result
             // The citations double as the "where this came from" list.
-            hits = try await APIClient.shared.search(current)
+            hits = try await APIClient.shared.search(current, vector: vector)
             hasSearched = true
         } catch {
             answer = nil

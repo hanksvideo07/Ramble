@@ -1,4 +1,5 @@
 import { pool, toVectorLiteral } from '../db/pool.ts';
+import { config } from '../lib/config.ts';
 import { timed } from '../lib/logger.ts';
 import { embedding } from './process.ts';
 
@@ -34,6 +35,13 @@ export interface SearchHit {
 
 export interface SearchOptions {
   limit?: number;
+  /**
+   * Query vector, embedded by the device. Semantic search is skipped when it
+   * is absent and the server has no embedder of its own — returning lexical
+   * and structured results is far better than comparing against vectors from
+   * a different model, which would be noise dressed up as relevance.
+   */
+  queryVector?: number[];
   /** Restrict to particular extracted item kinds, e.g. ['decision']. */
   kinds?: string[];
   entityId?: string;
@@ -179,8 +187,13 @@ async function semanticSearch(
   limit: number,
   options: SearchOptions,
 ): Promise<RankedRow[]> {
-  const [vector] = await embedding.embed([query]);
-  if (!vector) return [];
+  const vector =
+    options.queryVector ??
+    (config.embedding.provider === 'device'
+      ? undefined
+      : (await embedding.embed([query]))[0]);
+
+  if (!vector || vector.length !== config.embedding.dimension) return [];
 
   const params: unknown[] = [userId, toVectorLiteral(vector)];
   const filters = filterClauses(options, params, 'e');

@@ -80,9 +80,13 @@ export const config = {
   },
 
   embedding: {
-    provider: optional('EMBEDDING_PROVIDER', 'mock'),
-    model: optional('EMBEDDING_MODEL', 'text-embedding-3-small'),
-    dimension: int('EMBEDDING_DIMENSION', 1536),
+    // 'device' means the client embeds; the server never calls an embedding
+    // API and simply stores what the device computes.
+    provider: optional('EMBEDDING_PROVIDER', 'device'),
+    model: optional('EMBEDDING_MODEL', 'apple.nl_contextual'),
+    // Must match the width the device produces, or vectors are incomparable.
+    dimension: int('EMBEDDING_DIMENSION', 512),
+    deviceRevision: int('EMBEDDING_REVISION', 1),
     openaiKey: optional('OPENAI_API_KEY'),
   },
 

@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { pool, toVectorLiteral, withTransaction } from '../db/pool.ts';
+import { config } from '../lib/config.ts';
 import { log, timed } from '../lib/logger.ts';
 import { getAudio } from '../lib/storage.ts';
 import { createEmbeddingProvider } from '../providers/embedding.ts';
@@ -47,7 +48,11 @@ export async function processRamble(rambleId: string, options: ProcessOptions = 
   }
 
   try {
-    if (options.force || needsStage(ramble.processing_state, 'transcribe')) {
+    // A transcript from the device makes server transcription redundant: it is
+    // the same work, done again, for money.
+    const hasDeviceTranscript = await deviceTranscriptExists(rambleId);
+
+    if (!hasDeviceTranscript && (options.force || needsStage(ramble.processing_state, 'transcribe'))) {
       await runStage(rambleId, 'transcribe', () => transcribeStage(ramble));
     }
     if (options.force || needsStage(await currentState(rambleId), 'understand')) {
@@ -74,6 +79,14 @@ export async function processRamble(rambleId: string, options: ProcessOptions = 
     log.error('pipeline.failed', { ramble_id: rambleId, error: message });
     throw error;
   }
+}
+
+async function deviceTranscriptExists(rambleId: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `SELECT 1 FROM transcripts WHERE ramble_id = $1 AND origin = 'device' LIMIT 1`,
+    [rambleId],
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 function needsStage(state: string, stage: Stage): boolean {
@@ -545,9 +558,16 @@ async function embedStage(rambleId: string): Promise<void> {
 
   if (units.length === 0) return;
 
-  const vectors = await timed('embedding.latency', { ramble_id: rambleId, units: units.length }, () =>
-    embedding.embed(units.map((u) => u.content)),
-  );
+  // With on-device embeddings the server never calls an embedding API: it
+  // records what should be searchable and leaves the vector NULL for the
+  // device to fill in. Lexical and structured search work immediately either
+  // way; only semantic search waits for the device to catch up.
+  const onDevice = config.embedding.provider === 'device';
+  const vectors = onDevice
+    ? []
+    : await timed('embedding.latency', { ramble_id: rambleId, units: units.length }, () =>
+        embedding.embed(units.map((u) => u.content)),
+      );
 
   await withTransaction(async (client) => {
     // Rebuild this ramble's index wholesale so re-processing never leaves
@@ -558,23 +578,21 @@ async function embedStage(rambleId: string): Promise<void> {
     for (let i = 0; i < units.length; i += 1) {
       const unit = units[i]!;
       const vector = vectors[i];
-      if (vector) {
-        await client.query(
-          `INSERT INTO embedding_records
-             (user_id, ramble_id, source_kind, source_id, content, embedding, model, pipeline_version)
-           VALUES ($1,$2,$3,$4,$5,$6::vector,$7,$8)`,
-          [
-            ramble.user_id,
-            rambleId,
-            unit.kind,
-            unit.sourceId,
-            unit.content,
-            toVectorLiteral(vector),
-            embedding.model,
-            PIPELINE_VERSION,
-          ],
-        );
-      }
+      await client.query(
+        `INSERT INTO embedding_records
+           (user_id, ramble_id, source_kind, source_id, content, embedding, model, pipeline_version)
+         VALUES ($1,$2,$3,$4,$5,$6::vector,$7,$8)`,
+        [
+          ramble.user_id,
+          rambleId,
+          unit.kind,
+          unit.sourceId,
+          unit.content,
+          vector ? toVectorLiteral(vector) : null,
+          onDevice ? config.embedding.model : embedding.model,
+          PIPELINE_VERSION,
+        ],
+      );
       await client.query(
         `INSERT INTO search_documents (user_id, ramble_id, source_kind, source_id, title, content)
          VALUES ($1,$2,$3,$4,$5,$6)`,
