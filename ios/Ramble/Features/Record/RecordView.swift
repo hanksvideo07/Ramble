@@ -40,12 +40,20 @@ struct RecordView: View {
                     WaveformView(levels: recorder.levels, isActive: recorder.isRecording)
                         .frame(height: 72)
                         .padding(.horizontal, 32)
-                        .padding(.top, 28)
+                        .padding(.top, 24)
 
-                    Text(recorder.isRecording ? "Listening…" : "Getting ready…")
-                        .font(Theme.Typography.secondary)
-                        .foregroundStyle(Theme.Palette.muted)
+                    if recorder.isTranscribing {
+                        LiveTranscriptView(
+                            settled: recorder.transcribedText,
+                            volatile: recorder.volatileText
+                        )
                         .padding(.top, 20)
+                    } else {
+                        Text(recorder.isRecording ? "Listening…" : "Getting ready…")
+                            .font(Theme.Typography.secondary)
+                            .foregroundStyle(Theme.Palette.muted)
+                            .padding(.top, 20)
+                    }
                 }
 
                 Spacer()
@@ -188,14 +196,23 @@ struct RecordView: View {
     }
 }
 
-/// Live audio levels. Bars scroll from the right so the newest sound is
-/// nearest the eye, and the whole thing settles to a flat line when silent.
+/// Live audio levels.
+///
+/// Bars scroll in from the right so the newest sound is nearest the eye, and
+/// older bars fall away exponentially rather than linearly. A linear falloff
+/// leaves a long straight ramp behind every syllable — the shape reads as a
+/// row of triangles instead of a voice — whereas an exponential one collapses
+/// the tail quickly and keeps the leading edge sharp.
 struct WaveformView: View {
     let levels: [CGFloat]
     var isActive: Bool
 
     private let barWidth: CGFloat = 3
     private let spacing: CGFloat = 3
+
+    /// Per-bar decay applied across the visible window, newest to oldest.
+    /// 0.90 leaves the newest third clearly lit and the oldest barely there.
+    private let trailDecay: CGFloat = 0.90
 
     var body: some View {
         GeometryReader { geometry in
@@ -207,10 +224,18 @@ struct WaveformView: View {
                 // Leading blanks keep new bars entering from the right rather
                 // than the whole waveform re-centring on every sample.
                 ForEach(0..<padding, id: \.self) { _ in
-                    bar(height: 2, opacity: 0.25)
+                    bar(height: 2, opacity: 0.12, scale: 1)
                 }
-                ForEach(Array(shown.enumerated()), id: \.offset) { _, level in
-                    bar(height: max(2, level * geometry.size.height), opacity: 1)
+                ForEach(Array(shown.enumerated()), id: \.offset) { index, level in
+                    // Age measured from the newest bar, so index 0 of the
+                    // visible window is the oldest and fades most.
+                    let age = shown.count - 1 - index
+                    let falloff = pow(trailDecay, CGFloat(age))
+                    bar(
+                        height: max(2, level * geometry.size.height * falloff),
+                        opacity: Double(max(0.10, falloff)),
+                        scale: falloff
+                    )
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .trailing)
@@ -218,12 +243,74 @@ struct WaveformView: View {
         }
     }
 
-    private func bar(height: CGFloat, opacity: Double) -> some View {
+    private func bar(height: CGFloat, opacity: Double, scale: CGFloat) -> some View {
         Capsule()
             .fill(isActive ? Theme.Palette.accent : Theme.Palette.muted)
             .frame(width: barWidth, height: height)
             .opacity(opacity)
     }
+}
+
+/// The words as they are spoken.
+///
+/// Text scrolls up as it accumulates and fades toward the top, so the newest
+/// line is always the clearest thing on screen. The tail the recognizer is
+/// still revising is shown dimmer than settled text, which makes the
+/// correcting-itself behaviour read as normal rather than as a glitch.
+struct LiveTranscriptView: View {
+    let settled: String
+    let volatile: String
+
+    private var combined: String {
+        [settled, volatile].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Pushes the first words to the bottom so text rises into
+                    // view rather than starting at the top and growing down.
+                    Spacer(minLength: 0).frame(height: 60)
+
+                    (Text(settled)
+                        .foregroundStyle(Theme.Palette.text)
+                     + Text(settled.isEmpty ? "" : " ")
+                     + Text(volatile)
+                        .foregroundStyle(Theme.Palette.muted))
+                        .font(.system(size: 17, weight: .regular))
+                        .lineSpacing(4)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(Self.bottomAnchor)
+                }
+                .padding(.horizontal, 4)
+            }
+            .frame(height: 160)
+            // Fades the top of the scroll view so older lines dissolve rather
+            // than being cut off by a hard edge.
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black.opacity(0.35), location: 0.28),
+                        .init(color: .black, location: 0.6),
+                        .init(color: .black, location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .padding(.horizontal, 28)
+            .onChange(of: combined) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    private static let bottomAnchor = "live-transcript-bottom"
 }
 
 #if canImport(UIKit)

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var integrations: [APIClient.IntegrationList.Item] = []
     @State private var showingAdvanced = false
     @State private var confirmSignOut = false
+    @State private var transcriptionQuality = TranscriptionQuality.preferred
 
     var body: some View {
         NavigationStack {
@@ -49,8 +50,21 @@ struct SettingsView: View {
                     Text("Calendar and reminders happen on this device. Nothing about your calendar is sent to Ramble's servers.")
                 }
 
-                Section("Recording") {
+                Section {
                     NavigationLink("Waiting to upload") { PendingUploadsView() }
+                    if session.health?.hasCloudTranscription == true {
+                        Picker("Transcription", selection: $transcriptionQuality) {
+                            ForEach(TranscriptionQuality.allCases) { quality in
+                                Text(quality.label).tag(quality)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Recording")
+                } footer: {
+                    if session.health?.hasCloudTranscription == true {
+                        Text(transcriptionQuality.detail)
+                    }
                 }
 
                 Section {
@@ -73,6 +87,9 @@ struct SettingsView: View {
                 }
             }
             .task { integrations = (try? await APIClient.shared.integrations()) ?? [] }
+            .onChange(of: transcriptionQuality) { _, quality in
+                TranscriptionQuality.preferred = quality
+            }
             .confirmationDialog("Sign out of Ramble?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) {
                     Task {

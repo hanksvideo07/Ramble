@@ -10,6 +10,7 @@ struct RambleDetailView: View {
     @State private var showingTranscript = false
     @State private var editingItem: ExtractedItem?
     @Environment(\.dismiss) private var dismiss
+    @Environment(Session.self) private var session
 
     init(rambleId: String) {
         self.rambleId = rambleId
@@ -115,6 +116,11 @@ struct RambleDetailView: View {
                 Menu {
                     Button("Process again", systemImage: "arrow.clockwise") {
                         Task { await model.reprocess() }
+                    }
+                    if session.health?.hasCloudTranscription == true {
+                        Button("Transcribe more accurately", systemImage: "waveform.badge.magnifyingglass") {
+                            Task { await model.upgradeTranscript() }
+                        }
                     }
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         Task {

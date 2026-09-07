@@ -82,6 +82,17 @@ final class RambleDetailModel {
         }
     }
 
+    /// Re-transcribes with the cloud provider and re-runs understanding on the
+    /// better transcript.
+    func upgradeTranscript() async {
+        do {
+            try await APIClient.shared.upgradeTranscript(rambleId: rambleId)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func reprocess() async {
         do {
             try await APIClient.shared.reprocess(id: rambleId)

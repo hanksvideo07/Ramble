@@ -157,6 +157,19 @@ class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 }
 
+/**
+ * Whether the server can transcribe with a real provider rather than a
+ * stand-in. Surfaced to the client so the higher-accuracy option is only
+ * offered when it would actually do something.
+ */
+export function isCloudTranscriptionAvailable(): boolean {
+  const { provider, deepgramKey, openaiKey } = config.transcription;
+  return (
+    (provider === 'deepgram' && Boolean(deepgramKey)) ||
+    (provider === 'openai' && Boolean(openaiKey))
+  );
+}
+
 export function createTranscriptionProvider(): TranscriptionProvider {
   const { provider, deepgramKey, openaiKey } = config.transcription;
   if (provider === 'deepgram' && deepgramKey) return new DeepgramTranscriptionProvider(deepgramKey);

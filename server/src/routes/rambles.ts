@@ -6,6 +6,7 @@ import { track } from '../lib/analytics.ts';
 import { log } from '../lib/logger.ts';
 import { audioKey, getAudio, putAudio, signedPlaybackUrl, verifyKeySignature } from '../lib/storage.ts';
 import { emitWebhook } from '../integrations/webhooks.ts';
+import { isCloudTranscriptionAvailable } from '../providers/transcription.ts';
 import { enqueue } from '../pipeline/queue.ts';
 import { mergeEntities } from '../pipeline/entities.ts';
 
@@ -208,6 +209,42 @@ export async function rambleRoutes(app: FastifyInstance): Promise<void> {
     await track(user.id, 'transcript_received', { source: 'device', segments: body.segments.length });
     enqueue(id);
     return reply.code(202).send({ id, processing_state: 'transcribed' });
+  });
+
+  /**
+   * Re-transcribes with the cloud provider and re-runs understanding on the
+   * better transcript.
+   *
+   * On-device transcription is free and private but loses ground on accents,
+   * background noise, and unusual vocabulary. This is the escape hatch for a
+   * recording where that shows — and for the setting that opts every recording
+   * into it.
+   */
+  app.post('/v1/rambles/:id/upgrade-transcript', async (request, reply) => {
+    const user = await requireUser(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+
+    if (!isCloudTranscriptionAvailable()) {
+      throw new HttpError(
+        503,
+        'Higher-accuracy transcription is not configured on this server.',
+      );
+    }
+
+    const { rowCount } = await pool.query(
+      `UPDATE rambles SET processing_state = 'uploaded', processing_error = NULL
+        WHERE id = $1 AND user_id = $2`,
+      [id, user.id],
+    );
+    if (rowCount === 0) throw new HttpError(404, 'Ramble not found.');
+
+    // Dropping the device transcript is what makes the pipeline transcribe
+    // again rather than skipping the stage.
+    await pool.query(`DELETE FROM transcripts WHERE ramble_id = $1 AND origin = 'device'`, [id]);
+
+    await track(user.id, 'transcript_upgrade_requested', {});
+    enqueue(id, { force: true });
+    return reply.code(202).send({ id, processing_state: 'uploaded' });
   });
 
   /** The timeline. Cursor-paginated by recorded_at. */

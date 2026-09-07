@@ -477,6 +477,13 @@ struct HealthReport: Codable {
     var usesOnDeviceEmbeddings: Bool {
         capabilities["embedding"]?.hasPrefix("device:") ?? false
     }
+
+    /// Whether the server can re-transcribe with a cloud provider. The
+    /// higher-accuracy setting is hidden when it cannot, rather than offering
+    /// something that would fail.
+    var hasCloudTranscription: Bool {
+        capabilities["cloud_transcription"] == "available"
+    }
 }
 
 /// One timed span of a transcript produced on the device. Mirrors the shape

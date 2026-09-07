@@ -115,6 +115,12 @@ final class CaptureQueue {
                 // Newly extracted items need vectors before semantic search
                 // can find them.
                 EmbeddingSync.shared.sync()
+
+                // The on-device transcript is already good enough to use, so
+                // the upgrade runs afterwards and quietly replaces it.
+                if TranscriptionQuality.preferred == .accurate {
+                    try? await APIClient.shared.upgradeTranscript(rambleId: rambleId)
+                }
             } catch APIError.offline {
                 isOnline = false
                 update(capture.id) { $0.lastError = "Waiting for a connection" }

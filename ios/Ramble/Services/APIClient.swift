@@ -329,6 +329,15 @@ actor APIClient {
         try check(response, data: data)
     }
 
+    /// Re-transcribes with the cloud provider and re-runs understanding on the
+    /// result. Used by the "higher accuracy" setting and the per-ramble action.
+    func upgradeTranscript(rambleId: String) async throws {
+        let (data, response) = try await perform(
+            request("POST", "/v1/rambles/\(rambleId)/upgrade-transcript")
+        )
+        try check(response, data: data)
+    }
+
     // MARK: - On-device embeddings
 
     struct PendingEmbeddings: Decodable {

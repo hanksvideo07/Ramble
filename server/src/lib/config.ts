@@ -130,5 +130,11 @@ export function capabilityReport() {
           ? 'openai'
           : 'mock',
     calendar: 'apple_local+google_stub',
+    // Whether the higher-accuracy option is worth offering in the app.
+    cloud_transcription:
+      (config.transcription.provider === 'deepgram' && Boolean(config.transcription.deepgramKey)) ||
+      (config.transcription.provider === 'openai' && Boolean(config.transcription.openaiKey))
+        ? 'available'
+        : 'unavailable',
   };
 }
