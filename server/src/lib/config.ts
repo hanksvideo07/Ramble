@@ -43,10 +43,16 @@ export const config = {
     signedUrlTtl: int('S3_SIGNED_URL_TTL', 3600),
   },
 
-  anthropic: {
-    apiKey: optional('ANTHROPIC_API_KEY'),
-    understandingModel: optional('UNDERSTANDING_MODEL', 'claude-sonnet-5'),
-    answerModel: optional('ANSWER_MODEL', 'claude-sonnet-5'),
+  openrouter: {
+    apiKey: optional('OPENROUTER_API_KEY'),
+    // Extraction is the safety-critical call: it decides whether something was
+    // a musing or an instruction. Schema adherence and instruction-following
+    // matter more here than model size, which is why the default is a small
+    // model known for both rather than the outright cheapest.
+    understandingModel: optional('UNDERSTANDING_MODEL', 'openai/gpt-5-nano'),
+    // Answering is lighter work — summarize retrieved excerpts — so it can run
+    // on something cheaper without risking a wrong action.
+    answerModel: optional('ANSWER_MODEL', 'nvidia/nemotron-3-nano-30b-a3b'),
   },
 
   transcription: {
@@ -77,8 +83,8 @@ export const config = {
  */
 export function capabilityReport() {
   return {
-    understanding: config.anthropic.apiKey ? 'anthropic' : 'mock',
-    answering: config.anthropic.apiKey ? 'anthropic' : 'mock',
+    understanding: config.openrouter.apiKey ? `openrouter:${config.openrouter.understandingModel}` : 'mock',
+    answering: config.openrouter.apiKey ? `openrouter:${config.openrouter.answerModel}` : 'mock',
     transcription:
       config.transcription.provider === 'deepgram' && config.transcription.deepgramKey
         ? 'deepgram'

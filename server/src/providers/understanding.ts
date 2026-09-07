@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../lib/config.ts';
 import { log } from '../lib/logger.ts';
 import {
@@ -11,61 +10,98 @@ import {
   understandingSystemPrompt,
   understandingUserPrompt,
 } from './prompts.ts';
+import { chat, extractJSON } from './openrouter.ts';
 import type { UnderstandingInput, UnderstandingProvider } from './types.ts';
 
-const TOOL_NAME = 'record_understanding';
-
-class AnthropicUnderstandingProvider implements UnderstandingProvider {
-  readonly name = 'anthropic';
+/**
+ * Structured extraction through OpenRouter.
+ *
+ * Any OpenRouter model can be used; the default is chosen for schema
+ * adherence and instruction-following rather than size, because the part that
+ * matters most here — telling a musing apart from an instruction — is a
+ * judgement call, not a knowledge problem.
+ *
+ * Output is always validated against the real Zod schema. A model that
+ * ignores the schema hint fails validation and gets exactly one repair
+ * attempt before the stage is failed and retried by the pipeline.
+ */
+class OpenRouterUnderstandingProvider implements UnderstandingProvider {
+  readonly name = 'openrouter';
   readonly mocked = false;
   readonly promptVersion = UNDERSTANDING_PROMPT_VERSION;
-  private readonly client: Anthropic;
 
-  constructor(apiKey: string, readonly model: string) {
-    this.client = new Anthropic({ apiKey });
-  }
+  constructor(readonly model: string) {}
 
   async understand(input: UnderstandingInput): Promise<UnderstandingResult> {
-    // tool_choice forces the structured shape rather than hoping for clean
-    // JSON in prose. The result is still validated before anything is written.
-    const response = await this.client.messages.create({
+    const system = understandingSystemPrompt(input.profile);
+    const user = understandingUserPrompt(input);
+
+    const first = await chat({
       model: this.model,
-      max_tokens: 8192,
-      system: understandingSystemPrompt(input.profile),
-      tools: [
-        {
-          name: TOOL_NAME,
-          description: 'Record the structured understanding of this recording.',
-          input_schema: understandingJsonSchema as never,
-        },
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
       ],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [{ role: 'user', content: understandingUserPrompt(input) }],
+      jsonSchema: { name: 'record_understanding', schema: understandingJsonSchema },
     });
 
-    const toolUse = response.content.find(
-      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
-    );
-    if (!toolUse) {
-      throw new Error('Understanding model returned no tool_use block.');
+    const parsed = this.validate(first);
+    if (parsed.ok) return parsed.value;
+
+    // One repair attempt, quoting the model's own output back at it. Small
+    // models usually miss a required field rather than misunderstand the task,
+    // and that is cheap to fix without redoing the reasoning.
+    log.warn('understanding.repairing_invalid_output', { model: this.model, issues: parsed.error });
+
+    const repaired = await chat({
+      model: this.model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+        { role: 'assistant', content: first },
+        {
+          role: 'user',
+          content:
+            `That response did not match the required schema:\n${parsed.error}\n\n` +
+            'Return the corrected JSON object only. No prose, no code fence.',
+        },
+      ],
+      jsonSchema: { name: 'record_understanding', schema: understandingJsonSchema },
+    });
+
+    const second = this.validate(repaired);
+    if (second.ok) return second.value;
+
+    throw new Error(`Understanding output failed validation after a repair attempt: ${second.error}`);
+  }
+
+  private validate(
+    raw: string,
+  ): { ok: true; value: UnderstandingResult } | { ok: false; error: string } {
+    let json: unknown;
+    try {
+      json = extractJSON(raw);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
 
-    const parsed = understandingResultSchema.safeParse(toolUse.input);
+    const parsed = understandingResultSchema.safeParse(json);
     if (!parsed.success) {
-      // Surface the shape problem, never the transcript content.
-      throw new Error(
-        `Understanding output failed validation: ${parsed.error.issues
-          .map((i) => `${i.path.join('.')}: ${i.message}`)
-          .join('; ')}`,
-      );
+      // Report the shape problem only, never the transcript content.
+      return {
+        ok: false,
+        error: parsed.error.issues
+          .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
+          .join('; '),
+      };
     }
-    return parsed.data;
+    return { ok: true, value: parsed.data };
   }
 }
 
 /**
  * Rule-based stand-in so the pipeline, timeline, actions, and search can all be
- * exercised without an Anthropic key. It recognizes a handful of spoken
+ * exercised without an OpenRouter key. It recognizes a handful of spoken
  * patterns; it is not intended to be good, only to be structurally correct.
  */
 class MockUnderstandingProvider implements UnderstandingProvider {
@@ -262,8 +298,8 @@ function truncate(text: string, max: number): string {
 }
 
 export function createUnderstandingProvider(): UnderstandingProvider {
-  const { apiKey, understandingModel } = config.anthropic;
-  if (apiKey) return new AnthropicUnderstandingProvider(apiKey, understandingModel);
-  log.warn('understanding.falling_back_to_mock', { reason: 'ANTHROPIC_API_KEY not set' });
+  const { apiKey, understandingModel } = config.openrouter;
+  if (apiKey) return new OpenRouterUnderstandingProvider(understandingModel);
+  log.warn('understanding.falling_back_to_mock', { reason: 'OPENROUTER_API_KEY not set' });
   return new MockUnderstandingProvider();
 }
