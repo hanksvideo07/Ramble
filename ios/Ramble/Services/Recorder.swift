@@ -34,7 +34,10 @@ final class Recorder {
     /// can show the waveform alone rather than an empty transcript pane.
     private(set) var isTranscribing = false
 
-    private let engine = AVAudioEngine()
+    /// Built fresh for each recording. A reused engine can carry state from a
+    /// failed or interrupted session, and the resulting start() failure gives
+    /// no hint that a previous attempt is the reason.
+    private var engine: AVAudioEngine?
     private var audioFile: AVAudioFile?
     private var fileConverter: AVAudioConverter?
     private var fileFormat: AVAudioFormat?
@@ -89,26 +92,18 @@ final class Recorder {
     func start() {
         guard state != .recording else { return }
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetoothHFP])
+            try Self.configureSession()
 
-            // Asking for a mono 44.1 kHz input keeps the common case on the
-            // path the file already uses. These are requests, not guarantees —
-            // Bluetooth headsets in particular will refuse — so the format is
-            // still read back from the hardware afterwards.
-            try? session.setPreferredSampleRate(44_100)
-            try? session.setPreferredInputNumberOfChannels(1)
-
-            try session.setActive(true)
-
+            let engine = AVAudioEngine()
+            self.engine = engine
             let input = engine.inputNode
-            let inputFormat = input.outputFormat(forBus: 0)
 
             // A zero here means the session has not really given us the
             // microphone — usually another app holding it, or a simulator with
             // no input device. Reported plainly rather than as an OSStatus from
             // whatever fails next.
-            guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            let reportedFormat = input.outputFormat(forBus: 0)
+            guard reportedFormat.sampleRate > 0, reportedFormat.channelCount > 0 else {
                 teardown()
                 state = .failed(
                     "No microphone is available. Another app may be using it, "
@@ -141,21 +136,22 @@ final class Recorder {
                 throw RecorderError.cannotCreateFile(error)
             }
             audioFile = file
+            fileFormat = file.processingFormat
 
-            // Converts whatever the microphone produces into the file's own
-            // format. Built once, not per buffer.
-            guard let fileConverter = AVAudioConverter(from: inputFormat, to: file.processingFormat) else {
-                throw RecorderError.unsupportedInput(inputFormat)
-            }
-            self.fileConverter = fileConverter
-            self.fileFormat = file.processingFormat
-
-            input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+            // A nil format means "whatever this node is actually running at".
+            // Passing a format read beforehand is the usual cause of
+            // engine.start() failing: activating the session can renegotiate
+            // the hardware, leaving the value stale and the tap mismatched.
+            input.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
                 self?.handle(buffer: buffer)
             }
 
             engine.prepare()
-            try engine.start()
+            do {
+                try engine.start()
+            } catch {
+                throw RecorderError.engineFailed(error)
+            }
 
             startedAt = Date()
             elapsed = 0
@@ -166,13 +162,57 @@ final class Recorder {
             state = .recording
 
             startDisplayTimer()
-            startLiveTranscription(inputFormat: inputFormat)
         } catch let error as RecorderError {
             teardown()
             state = .failed(error.localizedDescription)
         } catch {
             teardown()
             state = .failed(RecorderError.engineFailed(error).localizedDescription)
+        }
+    }
+
+    /// Puts the audio session into a state that can record.
+    ///
+    /// Configurations are tried from most preferred to most permissive. Modes
+    /// and options are not universally supported — they vary by device, by
+    /// route, and by what else is playing — and a rejected combination surfaces
+    /// as an opaque Core Audio failure from `engine.start()` rather than from
+    /// the call that actually caused it. Falling back is far better than
+    /// refusing to record because a headset dislikes one option.
+    private static func configureSession() throws {
+        let session = AVAudioSession.sharedInstance()
+
+        // `.measurement` disables the system's automatic gain and filtering,
+        // which is what transcription wants. `.default` is the fallback that
+        // every route accepts.
+        let attempts: [(AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)] = [
+            (.record, .measurement, [.allowBluetoothHFP]),
+            (.record, .default, [.allowBluetoothHFP]),
+            (.record, .default, []),
+            (.playAndRecord, .default, [.allowBluetoothHFP, .defaultToSpeaker]),
+        ]
+
+        var lastError: Error?
+        for (category, mode, options) in attempts {
+            do {
+                try session.setCategory(category, mode: mode, options: options)
+                lastError = nil
+                break
+            } catch {
+                lastError = error
+            }
+        }
+        if let lastError { throw RecorderError.sessionFailed(lastError) }
+
+        // Requests, not guarantees. A Bluetooth headset will refuse and force
+        // 16 kHz mono; the converter handles whatever we actually get.
+        try? session.setPreferredSampleRate(44_100)
+        try? session.setPreferredInputNumberOfChannels(1)
+
+        do {
+            try session.setActive(true)
+        } catch {
+            throw RecorderError.sessionFailed(error)
         }
     }
 
@@ -212,10 +252,12 @@ final class Recorder {
         displayTimer?.invalidate()
         displayTimer = nil
 
-        if engine.isRunning {
+        if let engine {
+            if engine.isRunning { engine.stop() }
             engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+            engine.reset()
         }
+        engine = nil
 
         finishAnalyzer?()
         finishAnalyzer = nil
@@ -244,9 +286,20 @@ final class Recorder {
 
     private nonisolated func writeToFile(_ buffer: AVAudioPCMBuffer) {
         MainActor.assumeIsolated {
-            guard let file = audioFile, let converter = fileConverter, let format = fileFormat else {
-                return
+            guard let file = audioFile, let format = fileFormat else { return }
+
+            // Bound on the first buffer rather than up front, because this is
+            // the only point where the real input format is known for certain.
+            if fileConverter == nil {
+                guard let converter = AVAudioConverter(from: buffer.format, to: format) else {
+                    writeFailure.record(RecorderError.unsupportedInput(buffer.format).localizedDescription)
+                    return
+                }
+                fileConverter = converter
+                // The transcriber needs the same format, and now it exists.
+                startLiveTranscription(inputFormat: buffer.format)
             }
+            guard let converter = fileConverter else { return }
             guard let converted = Self.convert(buffer, using: converter, to: format) else {
                 writeFailure.record("The microphone's audio could not be converted for saving.")
                 return
@@ -325,6 +378,7 @@ final class Recorder {
 
     private func startLiveTranscription(inputFormat: AVAudioFormat) {
         guard #available(iOS 26.0, *) else { return }
+        guard transcriptionTask == nil else { return }
 
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
@@ -434,6 +488,7 @@ final class Recorder {
 enum RecorderError: LocalizedError {
     case cannotCreateFile(Error)
     case unsupportedInput(AVAudioFormat)
+    case sessionFailed(Error)
     case engineFailed(Error)
 
     var errorDescription: String? {
@@ -442,10 +497,21 @@ enum RecorderError: LocalizedError {
             "Ramble couldn't create a file to record into. Check that there's free space on your iPhone."
         case .unsupportedInput(let format):
             "This microphone's format isn't supported (\(Int(format.sampleRate)) Hz, \(format.channelCount) ch). Try disconnecting Bluetooth audio."
+        case .sessionFailed(let underlying):
+            {
+                let ns = underlying as NSError
+                return "Ramble couldn't get access to the microphone. "
+                    + "[\(ns.domain) \(ns.code)\(ns.localizedDescription.isEmpty ? "" : ": \(ns.localizedDescription)")]"
+            }()
         case .engineFailed(let underlying):
-            // Includes the underlying text so a real cause is still visible,
-            // but leads with something actionable.
-            "Ramble couldn't start the microphone. Another app may be using it. (\(underlying.localizedDescription))"
+            // Core Audio's localizedDescription is frequently empty or generic,
+            // so the domain and code are included — they are what actually
+            // identifies the fault when this needs diagnosing.
+            {
+                let ns = underlying as NSError
+                return "Ramble couldn't start the microphone. Another app may be using it. "
+                    + "[\(ns.domain) \(ns.code)\(ns.localizedDescription.isEmpty ? "" : ": \(ns.localizedDescription)")]"
+            }()
         }
     }
 }
