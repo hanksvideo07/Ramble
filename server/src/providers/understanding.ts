@@ -43,6 +43,10 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
         { role: 'user', content: user },
       ],
       jsonSchema: { name: 'record_understanding', schema: understandingJsonSchema },
+      // Extraction emits a lot of JSON, and a reasoning model spends a large
+      // share of its budget thinking before any of it appears. Too small a
+      // budget truncates mid-object, which reads as a parse failure.
+      maxTokens: 16_384,
     });
 
     const parsed = this.validate(first);
@@ -67,6 +71,7 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
         },
       ],
       jsonSchema: { name: 'record_understanding', schema: understandingJsonSchema },
+      maxTokens: 16_384,
     });
 
     const second = this.validate(repaired);
@@ -95,8 +100,29 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
           .join('; '),
       };
     }
-    return { ok: true, value: parsed.data };
+    return { ok: true, value: { ...parsed.data, title: sanitizeTitle(parsed.data) } };
   }
+}
+
+/**
+ * Small models sometimes title a recording after the job they were asked to do
+ * — "Extract items", "Record understanding" — rather than after what was said.
+ * A prompt can discourage that but not prevent it, so a title that describes
+ * the extraction is replaced with one drawn from the content itself.
+ */
+const META_TITLE =
+  /^\s*(extract|record|identify|summar|analy|transcri|understand|output|structur|process|generat|list of|the user|user'?s)/i;
+
+export function sanitizeTitle(result: UnderstandingResult): string {
+  const title = result.title.trim();
+  if (title && !META_TITLE.test(title)) return title;
+
+  // Prefer the first substantive thing found; fall back to the summary.
+  const item = result.items.find((i) => i.kind !== 'summary' && i.title.trim().length > 0);
+  const fallback = item?.title ?? result.summary;
+  const clean = fallback.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '');
+  if (!clean) return 'Untitled ramble';
+  return clean.length <= 60 ? clean : `${clean.slice(0, 59).trimEnd()}…`;
 }
 
 /**

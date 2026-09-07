@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { decideConfirmation } from '../src/actions/policy.ts';
+import { sanitizeTitle } from '../src/providers/understanding.ts';
 
 describe('action confirmation policy', () => {
   it('never sends external communication unattended, however confident', () => {
@@ -85,5 +86,31 @@ describe('action confirmation policy', () => {
       confidence: 1,
     });
     assert.equal(decision.requiresConfirmation, true);
+  });
+});
+
+describe('title sanitizing', () => {
+  const base = {
+    summary: 'Discussed pricing with Sarah at Nationwide.',
+    items: [{ kind: 'task' as const, title: 'Send the pricing sheet', body: null, confidence: 0.8, source_quote: null, attributes: {} }],
+    entities: [], relationships: [], actions: [], clean_transcript: null, language: 'en',
+  };
+
+  it('keeps a real title', () => {
+    assert.equal(sanitizeTitle({ ...base, title: 'Nationwide pricing follow-up' }), 'Nationwide pricing follow-up');
+  });
+
+  it('replaces a title that describes the extraction instead of the recording', () => {
+    // The model titled the recording after its own job, which is useless in a
+    // timeline of fifty recordings.
+    assert.equal(sanitizeTitle({ ...base, title: 'Extract items' }), 'Send the pricing sheet');
+    assert.equal(sanitizeTitle({ ...base, title: 'Record Understanding' }), 'Send the pricing sheet');
+  });
+
+  it('falls back to the summary when there is no usable item', () => {
+    assert.equal(
+      sanitizeTitle({ ...base, items: [], title: 'Summarize the transcript' }),
+      'Discussed pricing with Sarah at Nationwide',
+    );
   });
 });

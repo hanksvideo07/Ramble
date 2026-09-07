@@ -63,13 +63,21 @@ export const config = {
 
   openrouter: {
     apiKey: optional('OPENROUTER_API_KEY'),
-    // Extraction is the safety-critical call: it decides whether something was
-    // a musing or an instruction. Schema adherence and instruction-following
-    // matter more here than model size, which is why the default is a small
-    // model known for both rather than the outright cheapest.
-    understandingModel: optional('UNDERSTANDING_MODEL', 'openai/gpt-5-nano'),
-    // Answering is lighter work — summarize retrieved excerpts — so it can run
-    // on something cheaper without risking a wrong action.
+    /**
+     * Extraction is the safety-critical call: it decides whether something was
+     * a musing or an instruction. Chosen by measuring exactly that, not by
+     * price or size — see `npm run eval:models`.
+     *
+     * Measured over the four intent classes: nemotron produced valid JSON
+     * every time and never misread a statement in the dangerous direction.
+     * gpt-oss-20b is cheaper but read "Email Sarah and tell her" as a direct
+     * instruction rather than an outbound message. gpt-5-nano is unusable
+     * here at any price: it spends its entire token budget on reasoning and
+     * returns empty content.
+     */
+    understandingModel: optional('UNDERSTANDING_MODEL', 'nvidia/nemotron-3-nano-30b-a3b'),
+    // Answering only summarizes excerpts that were already retrieved, so it
+    // cannot trigger an action and can run on the same cheap model.
     answerModel: optional('ANSWER_MODEL', 'nvidia/nemotron-3-nano-30b-a3b'),
   },
 

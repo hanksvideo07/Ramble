@@ -102,7 +102,14 @@ export const understandingJsonSchema = {
   type: 'object',
   required: ['title', 'summary', 'items', 'entities', 'actions'],
   properties: {
-    title: { type: 'string', description: 'Short specific title, 2-6 words. No trailing period.' },
+    title: {
+      type: 'string',
+      description:
+        'What this person would call this recording when scanning a list of them later. ' +
+        '2-6 words, drawn from what they actually talked about. ' +
+        'For example "Nationwide pricing follow-up" or "History paper deadline". ' +
+        'Never describe the task you are performing, and never use words from these instructions.',
+    },
     summary: { type: 'string', description: 'One or two sentences covering everything discussed.' },
     clean_transcript: {
       type: 'string',
@@ -168,7 +175,43 @@ export const understandingJsonSchema = {
           type: { type: 'string', enum: [...ACTION_TYPES] },
           intent_class: { type: 'string', enum: [...INTENT_CLASSES] },
           confidence: { type: 'number' },
-          parameters: { type: 'object' },
+          parameters: {
+            type: 'object',
+            description:
+              'The details needed to carry the action out. Always include a title. ' +
+              'Include the fields relevant to this action type and leave the rest out.',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'Required. What to call the reminder, task, event, or note. ' +
+                  'Phrase it as the thing to be done: "Send Sarah the pricing sheet", not "Remind me to send Sarah the pricing sheet".',
+              },
+              due_at: {
+                type: 'string',
+                description: 'reminder.create / task.create. ISO 8601, resolved against the recording time.',
+              },
+              starts_at: {
+                type: 'string',
+                description: 'calendar.create_event. ISO 8601, resolved against the recording time.',
+              },
+              ends_at: { type: 'string', description: 'calendar.create_event. ISO 8601.' },
+              duration_minutes: {
+                type: 'integer',
+                description: 'calendar.create_event, when a length was implied but no end time given.',
+              },
+              location: { type: 'string', description: 'calendar.create_event, if a place was named.' },
+              notes: { type: 'string', description: 'Any extra detail worth keeping with the item.' },
+              to: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'email.draft / email.send. Names or addresses actually spoken.',
+              },
+              subject: { type: 'string', description: 'email.draft / email.send.' },
+              body: { type: 'string', description: 'email.draft / email.send.' },
+            },
+            required: ['title'],
+          },
           source_quote: { type: 'string' },
         },
       },

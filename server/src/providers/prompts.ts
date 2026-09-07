@@ -54,11 +54,13 @@ RULES
 
 8. Resolve relative dates against the recording time given in the request. "Tomorrow morning" becomes a concrete ISO 8601 datetime. If a time is vague, give the date and omit the time rather than fabricating one.
 
-9. The title is what this person would call this recording later when scanning a list. Specific, 2-6 words, no trailing period.
+9. The title is what this person would call this recording later when scanning a list of them. Specific, 2-6 words, no trailing period, drawn from what they actually said. "Nationwide pricing follow-up", not "Extracted items" — never describe the work you are doing, and never reuse words from these instructions.
+
+9b. Every action needs parameters, and every action's parameters need a title. Phrase it as the thing to be done: for "remind me tomorrow to send Sarah the pricing sheet", the title is "Send Sarah the pricing sheet", not "Remind me to...". An action with no parameters cannot be carried out and is worse than no action at all.
 
 10. clean_transcript removes filler words, stammers, and false starts. It never paraphrases, summarizes, or reorders. If nothing needs removing, return the transcript unchanged.
 
-Return your result by calling the record_understanding tool.`;
+Return a single JSON object and nothing else.`;
 }
 
 export function understandingUserPrompt(input: {

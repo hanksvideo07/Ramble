@@ -76,19 +76,33 @@ export async function chat(request: ChatRequest): Promise<string> {
 
   const payload = (await response.json()) as {
     choices?: { message?: { content?: string }; finish_reason?: string }[];
-    usage?: { prompt_tokens: number; completion_tokens: number };
+    usage?: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      completion_tokens_details?: { reasoning_tokens?: number };
+    };
     model?: string;
   };
 
   const choice = payload.choices?.[0];
   const content = choice?.message?.content;
-  if (!content) throw new OpenRouterError(502, 'OpenRouter returned no message content.');
 
-  // A truncated response is almost always invalid JSON; say so plainly rather
-  // than letting it fail as a confusing parse error downstream.
+  // Checked before the empty-content case, because the reason matters. A
+  // reasoning model can spend its whole budget thinking and return nothing at
+  // all, which looks like a broken response but is really a model that does
+  // not suit this task — say so, rather than reporting a mystery.
   if (choice?.finish_reason === 'length') {
-    throw new OpenRouterError(502, 'Model output was cut off before it finished. Try a shorter section.');
+    const reasoning = payload.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+    throw new OpenRouterError(
+      502,
+      reasoning > 0 && !content
+        ? `${request.model} used its entire ${request.maxTokens ?? 8192}-token budget on reasoning ` +
+          'and produced no output. Use a non-reasoning model for extraction.'
+        : 'Model output was cut off before it finished.',
+    );
   }
+
+  if (!content) throw new OpenRouterError(502, 'OpenRouter returned no message content.');
 
   log.debug('openrouter.usage', {
     model: payload.model,
