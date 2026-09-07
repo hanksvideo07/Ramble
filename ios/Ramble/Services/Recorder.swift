@@ -36,6 +36,11 @@ final class Recorder {
 
     private let engine = AVAudioEngine()
     private var audioFile: AVAudioFile?
+    private var fileConverter: AVAudioConverter?
+    private var fileFormat: AVAudioFormat?
+    /// Set from the audio thread if a write fails, so the failure surfaces
+    /// while the person is still talking rather than after they stop.
+    private let writeFailure = FailureBox()
     private var startedAt: Date?
     private var displayTimer: Timer?
 
@@ -86,28 +91,64 @@ final class Recorder {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .spokenAudio, options: [.allowBluetoothHFP])
+
+            // Asking for a mono 44.1 kHz input keeps the common case on the
+            // path the file already uses. These are requests, not guarantees —
+            // Bluetooth headsets in particular will refuse — so the format is
+            // still read back from the hardware afterwards.
+            try? session.setPreferredSampleRate(44_100)
+            try? session.setPreferredInputNumberOfChannels(1)
+
             try session.setActive(true)
 
             let input = engine.inputNode
             let inputFormat = input.outputFormat(forBus: 0)
-            guard inputFormat.sampleRate > 0 else {
-                state = .failed("No microphone input is available.")
+
+            // A zero here means the session has not really given us the
+            // microphone — usually another app holding it, or a simulator with
+            // no input device. Reported plainly rather than as an OSStatus from
+            // whatever fails next.
+            guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+                teardown()
+                state = .failed(
+                    "No microphone is available. Another app may be using it, "
+                        + "or this device has no audio input."
+                )
                 return
             }
 
             let url = Self.newRecordingURL()
-            // 64 kbps mono AAC keeps an hour under 30 MB while staying clearly
-            // intelligible for transcription.
-            let file = try AVAudioFile(
-                forWriting: url,
-                settings: [
-                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                    AVSampleRateKey: inputFormat.sampleRate,
-                    AVNumberOfChannelsKey: 1,
-                    AVEncoderBitRateKey: 64_000,
-                ]
-            )
+
+            // The file's format is fixed rather than copied from the hardware.
+            // Input can arrive stereo, at 16 kHz over Bluetooth, or at rates
+            // the AAC encoder rejects, and AVAudioFile.write refuses any buffer
+            // whose format differs from its own — which is what produced
+            // "OSStatus error: -50" when these were assumed to match. Writing a
+            // known-good format and converting into it removes the entire class
+            // of failure.
+            let file: AVAudioFile
+            do {
+                file = try AVAudioFile(
+                    forWriting: url,
+                    settings: [
+                        AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                        AVSampleRateKey: 44_100,
+                        AVNumberOfChannelsKey: 1,
+                        AVEncoderBitRateKey: 64_000,
+                    ]
+                )
+            } catch {
+                throw RecorderError.cannotCreateFile(error)
+            }
             audioFile = file
+
+            // Converts whatever the microphone produces into the file's own
+            // format. Built once, not per buffer.
+            guard let fileConverter = AVAudioConverter(from: inputFormat, to: file.processingFormat) else {
+                throw RecorderError.unsupportedInput(inputFormat)
+            }
+            self.fileConverter = fileConverter
+            self.fileFormat = file.processingFormat
 
             input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
                 self?.handle(buffer: buffer)
@@ -126,9 +167,12 @@ final class Recorder {
 
             startDisplayTimer()
             startLiveTranscription(inputFormat: inputFormat)
-        } catch {
+        } catch let error as RecorderError {
             teardown()
             state = .failed(error.localizedDescription)
+        } catch {
+            teardown()
+            state = .failed(RecorderError.engineFailed(error).localizedDescription)
         }
     }
 
@@ -181,6 +225,8 @@ final class Recorder {
 
         // Closing the file flushes the encoder's remaining frames.
         audioFile = nil
+        fileConverter = nil
+        fileFormat = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -191,15 +237,28 @@ final class Recorder {
     /// display timer instead.
     private nonisolated func handle(buffer: AVAudioPCMBuffer) {
         // The write comes first and is never conditional on anything below it.
-        if let file = audioFileForWriting() {
-            try? file.write(from: buffer)
-        }
+        writeToFile(buffer)
         levelBox.store(Self.peakLevel(of: buffer))
         yieldToAnalyzer(buffer)
     }
 
-    private nonisolated func audioFileForWriting() -> AVAudioFile? {
-        MainActor.assumeIsolated { audioFile }
+    private nonisolated func writeToFile(_ buffer: AVAudioPCMBuffer) {
+        MainActor.assumeIsolated {
+            guard let file = audioFile, let converter = fileConverter, let format = fileFormat else {
+                return
+            }
+            guard let converted = Self.convert(buffer, using: converter, to: format) else {
+                writeFailure.record("The microphone's audio could not be converted for saving.")
+                return
+            }
+            do {
+                try file.write(from: converted)
+            } catch {
+                // A failed write means the recording is being lost right now.
+                // It is reported rather than swallowed.
+                writeFailure.record(error.localizedDescription)
+            }
+        }
     }
 
     private nonisolated func yieldToAnalyzer(_ buffer: AVAudioPCMBuffer) {
@@ -234,6 +293,16 @@ final class Recorder {
 
     private func tick() {
         guard state == .recording, let startedAt else { return }
+
+        // Stop immediately if audio has stopped reaching disk. Continuing to
+        // show a running timer over a broken recording is the worst outcome
+        // available.
+        if let failure = writeFailure.take() {
+            teardown()
+            state = .failed(failure)
+            return
+        }
+
         elapsed = Date().timeIntervalSince(startedAt)
 
         let incoming = levelBox.take()
@@ -357,6 +426,46 @@ final class Recorder {
 
     static func newRecordingURL() -> URL {
         recordingsDirectory().appending(path: "\(UUID().uuidString).m4a")
+    }
+}
+
+/// Failures that need to be explained in the person's terms rather than as a
+/// Core Audio status code.
+enum RecorderError: LocalizedError {
+    case cannotCreateFile(Error)
+    case unsupportedInput(AVAudioFormat)
+    case engineFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .cannotCreateFile:
+            "Ramble couldn't create a file to record into. Check that there's free space on your iPhone."
+        case .unsupportedInput(let format):
+            "This microphone's format isn't supported (\(Int(format.sampleRate)) Hz, \(format.channelCount) ch). Try disconnecting Bluetooth audio."
+        case .engineFailed(let underlying):
+            // Includes the underlying text so a real cause is still visible,
+            // but leads with something actionable.
+            "Ramble couldn't start the microphone. Another app may be using it. (\(underlying.localizedDescription))"
+        }
+    }
+}
+
+/// Carries a write failure from the audio thread to the display timer.
+private final class FailureBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var message: String?
+
+    func record(_ text: String) {
+        lock.lock()
+        // Keep the first failure; later ones are consequences of it.
+        if message == nil { message = text }
+        lock.unlock()
+    }
+
+    func take() -> String? {
+        lock.lock()
+        defer { message = nil; lock.unlock() }
+        return message
     }
 }
 
