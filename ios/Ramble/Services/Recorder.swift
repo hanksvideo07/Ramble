@@ -34,6 +34,19 @@ final class Recorder {
     /// can show the waveform alone rather than an empty transcript pane.
     private(set) var isTranscribing = false
 
+    /// Why live text is or is not appearing.
+    ///
+    /// This used to fail silently: if the speech model had not been downloaded
+    /// the whole feature just did nothing, which is indistinguishable from it
+    /// being broken.
+    enum LiveTranscription: Equatable {
+        case off
+        case downloadingModel
+        case running
+        case unavailable(String)
+    }
+    private(set) var liveTranscription: LiveTranscription = .off
+
     /// Built fresh for each recording. A reused engine can carry state from a
     /// failed or interrupted session, and the resulting start() failure gives
     /// no hint that a previous attempt is the reason.
@@ -247,6 +260,7 @@ final class Recorder {
         transcribedText = ""
         volatileText = ""
         isTranscribing = false
+        liveTranscription = .off
     }
 
     private func teardown() {
@@ -443,12 +457,31 @@ final class Recorder {
 
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
-            guard
-                let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current),
-                await SpeechTranscriber.installedLocales.contains(where: {
-                    $0.identifier(.bcp47) == locale.identifier(.bcp47)
-                })
-            else { return }
+
+            guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) else {
+                await MainActor.run {
+                    self.liveTranscription = .unavailable("\(Locale.current.identifier) isn't supported yet.")
+                }
+                return
+            }
+
+            // The model is a one-time download. Previously this checked
+            // whether it was installed and gave up when it wasn't — which is
+            // why no words ever appeared. It now installs it.
+            let installed = await SpeechTranscriber.installedLocales.contains {
+                $0.identifier(.bcp47) == locale.identifier(.bcp47)
+            }
+            if !installed {
+                await MainActor.run { self.liveTranscription = .downloadingModel }
+                do {
+                    try await OnDeviceTranscriber.prepare(locale: locale)
+                } catch {
+                    await MainActor.run {
+                        self.liveTranscription = .unavailable(error.localizedDescription)
+                    }
+                    return
+                }
+            }
 
             // volatileResults is what makes words appear as they are said,
             // rather than a sentence at a time once each is finished.
@@ -484,6 +517,7 @@ final class Recorder {
                     let text = String(result.text.characters)
                     await MainActor.run {
                         self.isTranscribing = true
+                        self.liveTranscription = .running
                         if result.isFinal {
                             // Confirmed text accumulates; the volatile tail is
                             // cleared because it has just been superseded.
@@ -497,8 +531,12 @@ final class Recorder {
                 }
             } catch {
                 // Live text is a convenience. Losing it must never affect the
-                // recording, so this ends quietly.
-                await MainActor.run { self.isTranscribing = false }
+                // recording — but it should still say what happened rather
+                // than leaving a blank pane.
+                await MainActor.run {
+                    self.isTranscribing = false
+                    self.liveTranscription = .unavailable(error.localizedDescription)
+                }
             }
         }
     }

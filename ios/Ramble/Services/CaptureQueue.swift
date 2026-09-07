@@ -99,18 +99,23 @@ final class CaptureQueue {
                     update(capture.id) { $0.rambleId = rambleId }
                 }
 
-                // Transcribe before deleting the audio, since this is the
-                // only moment the file is guaranteed to still be here. A
-                // failure is not fatal — the server can transcribe instead —
-                // so it never blocks the upload.
-                await transcribeOnDevice(capture: capture, rambleId: rambleId)
-
+                // The audio goes up first, always. It is the source of
+                // truth, and nothing — least of all an optional convenience
+                // like a local transcript — is allowed to delay it. Doing
+                // this the other way round is what left uploads hanging:
+                // on-device transcription can stall indefinitely, and the
+                // recording sat on the phone while it did.
                 try await APIClient.shared.uploadAudio(rambleId: rambleId, fileURL: capture.fileURL)
+
+                remove(capture.id)
+                NotificationCenter.default.post(name: .rambleUploaded, object: rambleId)
+
+                // Now that the server has the audio and is already processing
+                // it, a local transcript is a bonus rather than a dependency.
+                await transcribeOnDevice(capture: capture, rambleId: rambleId)
 
                 // Only now is the local copy redundant.
                 try? FileManager.default.removeItem(at: capture.fileURL)
-                remove(capture.id)
-                NotificationCenter.default.post(name: .rambleUploaded, object: rambleId)
 
                 // Newly extracted items need vectors before semantic search
                 // can find them.
@@ -148,8 +153,15 @@ final class CaptureQueue {
         guard #available(iOS 26.0, *) else { return }
         guard await OnDeviceTranscriber.isReady() else { return }
 
+        // Skip it entirely when the server transcribes better than the phone
+        // can. Re-transcribing locally only to have the server's own result
+        // supersede it wastes battery for nothing.
+        if TranscriptionQuality.preferred == .accurate { return }
+
         do {
-            let transcript = try await OnDeviceTranscriber.shared.transcribe(fileURL: capture.fileURL)
+            let transcript = try await withTimeout(seconds: 120) {
+                try await OnDeviceTranscriber.shared.transcribe(fileURL: capture.fileURL)
+            }
             try await APIClient.shared.uploadTranscript(
                 rambleId: rambleId,
                 text: transcript.text,
@@ -220,6 +232,29 @@ final class CaptureQueue {
         if pending.count != saved.count { save() }
     }
 }
+
+/// Runs `work`, giving up after `seconds`.
+///
+/// Anything awaited inside the upload loop needs a bound. A system framework
+/// that never returns is indistinguishable from one that is slow, and the
+/// queue stops moving either way.
+private func withTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    _ work: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await work() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(seconds))
+            throw CaptureTimeout.expired
+        }
+        guard let first = try await group.next() else { throw CaptureTimeout.expired }
+        group.cancelAll()
+        return first
+    }
+}
+
+private enum CaptureTimeout: Error { case expired }
 
 extension Notification.Name {
     /// Posted with the new ramble's id once the server has its audio.

@@ -42,13 +42,42 @@ struct RecordView: View {
                         .padding(.horizontal, 32)
                         .padding(.top, 24)
 
-                    if recorder.isTranscribing {
+                    switch recorder.liveTranscription {
+                    case .running:
                         LiveTranscriptView(
                             settled: recorder.transcribedText,
                             volatile: recorder.volatileText
                         )
                         .padding(.top, 20)
-                    } else {
+
+                    case .downloadingModel:
+                        // A one-time download. Recording is unaffected, so this
+                        // says so rather than looking like something is wrong.
+                        VStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Setting up live text…")
+                                .font(Theme.Typography.secondary)
+                                .foregroundStyle(Theme.Palette.muted)
+                            Text("Your recording is being saved as normal.")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Palette.muted.opacity(0.7))
+                        }
+                        .padding(.top, 20)
+
+                    case .unavailable(let reason):
+                        VStack(spacing: 4) {
+                            Text("Live text isn't available")
+                                .font(Theme.Typography.secondary)
+                                .foregroundStyle(Theme.Palette.muted)
+                            Text(reason)
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Palette.muted.opacity(0.7))
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.horizontal, 40)
+                        .padding(.top, 20)
+
+                    case .off:
                         Text(recorder.isRecording ? "Listening…" : "Getting ready…")
                             .font(Theme.Typography.secondary)
                             .foregroundStyle(Theme.Palette.muted)
