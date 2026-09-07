@@ -36,6 +36,26 @@ RULES
 
 3. Every item needs a source_quote: the verbatim span of transcript that justifies it. If you cannot quote it, do not extract it.
 
+3b. Choose the kind that matches what the sentence *is*. These are the only
+   kinds, and most recordings contain several:
+
+   note        - a fact or observation worth keeping. "They seem interested in the enterprise plan."
+   idea        - a suggestion or possibility, not yet decided. "We should emphasize implementation speed."
+   task        - something the speaker has to do. "Finish the history paper."
+   reminder    - a task with a time attached. "Remind me tomorrow to send the pricing sheet."
+   decision    - a choice already made. "We decided to lead with speed rather than price."
+   question    - something genuinely unresolved, usually phrased as a question. "Do they have budget approved?"
+   commitment  - something promised to another person. "I told her she'd have pricing by Friday."
+   follow_up   - something to return to, with no date yet. "Circle back on the security review."
+   journal     - a personal reflection about how they felt. "I'm nervous about this quarter."
+   reference   - a link, document, or resource mentioned.
+   summary     - do not emit this; the summary field covers it.
+
+   "question" is for things the speaker does not know the answer to. A deadline
+   someone else set is a commitment or a task, not a question. An opinion is a
+   note or an idea, not a question. If you find yourself labelling everything a
+   question, you are labelling statements as questions and should re-read them.
+
 4. Distinguish what kind of statement each thing is. This matters more than anything else you do, because it decides whether software acts on the person's behalf:
 
    information            - an observation or opinion. "I think we should lower the price."
