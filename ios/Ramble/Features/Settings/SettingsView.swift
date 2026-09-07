@@ -1,113 +1,325 @@
 import SwiftUI
 
+/// Settings, written as a page rather than a control panel. Everything here
+/// describes what the app actually does — nothing claims a behaviour the
+/// implementation doesn't have.
 struct SettingsView: View {
     @Environment(Session.self) private var session
     @Environment(\.dismiss) private var dismiss
+
     @State private var integrations: [APIClient.IntegrationList.Item] = []
-    @State private var showingAdvanced = false
+    @State private var integrationsError: String?
     @State private var confirmSignOut = false
     @State private var transcriptionQuality = TranscriptionQuality.preferred
+    @State private var appearance = AppearanceSetting.current
+    @State private var queue = CaptureQueue.shared
 
     var body: some View {
-        NavigationStack {
-            List {
-                if session.isSampleMode {
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                MockBadge()
-                                Text("Sample understanding")
-                                    .font(Theme.Typography.body.weight(.medium))
-                            }
-                            Text("The server has no AI key configured, so extraction is a simple stand-in rather than real understanding. Search and everything else work normally.")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Palette.muted)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Metrics.xxl) {
+                header
+                if session.isSampleMode { sampleNotice }
+                account
+                work
+                connections
+                recording
+                appearanceSection
+                privacy
+                signOut
+            }
+            .screenPadding()
+            .padding(.bottom, Theme.Metrics.xxl)
+        }
+        .scrollIndicators(.hidden)
+        .background(Theme.Palette.paper)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await loadIntegrations() }
+        .onChange(of: transcriptionQuality) { _, quality in
+            TranscriptionQuality.preferred = quality
+        }
+        .onChange(of: appearance) { _, value in value.apply() }
+        .confirmationDialog(
+            "Sign out of Ramble?",
+            isPresented: $confirmSignOut,
+            titleVisibility: .visible
+        ) {
+            Button("Sign out", role: .destructive) {
+                Task {
+                    await session.signOut()
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("Recordings that haven't uploaded yet stay on this device and will send when you sign back in.")
+        }
+    }
+
+    // MARK: - Sections
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
+            Text("Settings")
+                .rambleType(Theme.Text.eyebrow)
+                .foregroundStyle(Theme.Palette.secondary)
+            Text("How this works.")
+                .rambleType(Theme.Text.screenTitle)
+                .foregroundStyle(Theme.Palette.ink)
+        }
+        .padding(.top, Theme.Metrics.sm)
+    }
+
+    private var sampleNotice: some View {
+        StatusNotice(
+            message: "Understanding is a stand-in right now",
+            detail: "No model is configured on the server, so titles and extracted items are produced by a simple rule-based fallback. Your recordings, transcripts, and search are real.",
+            systemImage: "flask"
+        )
+    }
+
+    private var account: some View {
+        Group {
+            if let account = session.account {
+                settingsSection("Account") {
+                    row(label: "Signed in as", value: account.email)
+                }
+            }
+        }
+    }
+
+    private var work: some View {
+        settingsSection("Type of work") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.md) {
+                Text("This changes what Ramble pays attention to when it reads a recording back. It is not a folder, and nothing is filed under it.")
+                    .rambleType(Theme.Text.supporting)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                FlowLayout(spacing: 6) {
+                    ForEach(UserProfile.allCases, id: \.self) { option in
+                        let selected = session.account?.profile == option
+                        Button {
+                            Task { _ = try? await APIClient.shared.updateProfile(option) }
+                        } label: {
+                            Text(option.label)
+                                .rambleType(Theme.Text.chip)
+                                .foregroundStyle(selected ? Theme.Palette.onAction : Theme.Palette.ink)
+                                .padding(.horizontal, Theme.Metrics.md)
+                                .padding(.vertical, 8)
+                                .background(selected ? Theme.Palette.action : Theme.Palette.subtle)
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: Theme.Metrics.labelRadius,
+                                        style: .continuous
+                                    )
+                                )
                         }
-                        .padding(.vertical, 4)
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+                    }
+                }
+            }
+        }
+    }
+
+    private var connections: some View {
+        settingsSection("Connected services") {
+            VStack(alignment: .leading, spacing: 0) {
+                if let integrationsError {
+                    StatusNotice(
+                        message: "Couldn't load your connections",
+                        detail: integrationsError,
+                        tone: .warning,
+                        systemImage: "exclamationmark.triangle",
+                        actionTitle: "Retry",
+                        action: { Task { await loadIntegrations() } }
+                    )
+                }
+
+                ForEach(available) { integration in
+                    IntegrationRow(integration: integration) { await toggle(integration) }
+                }
+
+                if !unavailable.isEmpty {
+                    Text("Not available yet")
+                        .rambleType(Theme.Text.eyebrow)
+                        .foregroundStyle(Theme.Palette.secondary)
+                        .padding(.top, Theme.Metrics.xl)
+                        .padding(.bottom, Theme.Metrics.sm)
+                    ForEach(unavailable) { integration in
+                        HStack {
+                            Text(integration.name)
+                                .rambleType(Theme.Text.body)
+                                .foregroundStyle(Theme.Palette.secondary)
+                            Spacer()
+                            Text("Soon")
+                                .rambleType(Theme.Text.meta)
+                                .foregroundStyle(Theme.Palette.secondary)
+                        }
+                        .padding(.vertical, Theme.Metrics.md)
+                        .overlay(alignment: .bottom) { Hairline() }
                     }
                 }
 
-                Section("You") {
-                    if let account = session.account {
-                        LabeledContent("Account", value: account.email)
-                        Picker("I'm a", selection: profileBinding) {
-                            ForEach(UserProfile.allCases, id: \.self) { profile in
-                                Text(profile.label).tag(profile)
-                            }
-                        }
+                Text("Calendar and reminders happen on this device through Apple's own frameworks. Nothing about your calendar is sent to Ramble's servers.")
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, Theme.Metrics.md)
+            }
+        }
+    }
+
+    private var recording: some View {
+        settingsSection("Recording") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Waiting to upload")
+                            .rambleType(Theme.Text.body)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text(queue.pending.isEmpty
+                             ? "Everything's uploaded."
+                             : queue.pending.count == 1
+                               ? "1 recording is still on this phone."
+                               : "\(queue.pending.count) recordings are still on this phone.")
+                            .rambleType(Theme.Text.meta)
+                            .foregroundStyle(Theme.Palette.secondary)
+                    }
+                    Spacer()
+                    if !queue.pending.isEmpty {
+                        Button("Send now") { queue.sync() }
+                            .rambleType(Theme.Text.meta)
+                            .foregroundStyle(Theme.Palette.action)
+                            .buttonStyle(.plain)
+                            .frame(minHeight: Theme.Metrics.minimumTouchTarget)
                     }
                 }
+                .padding(.vertical, Theme.Metrics.sm)
 
-                Section {
-                    ForEach(integrations) { integration in
-                        IntegrationRow(integration: integration) {
-                            await toggle(integration)
-                        }
-                    }
-                } header: {
-                    Text("Connections")
-                } footer: {
-                    Text("Calendar and reminders happen on this device. Nothing about your calendar is sent to Ramble's servers.")
-                }
-
-                Section {
-                    NavigationLink("Waiting to upload") { PendingUploadsView() }
-                    if session.health?.hasCloudTranscription == true {
+                if session.health?.hasCloudTranscription == true {
+                    VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
+                        Text("Transcription")
+                            .rambleType(Theme.Text.body)
+                            .foregroundStyle(Theme.Palette.ink)
                         Picker("Transcription", selection: $transcriptionQuality) {
                             ForEach(TranscriptionQuality.allCases) { quality in
                                 Text(quality.label).tag(quality)
                             }
                         }
-                    }
-                } header: {
-                    Text("Recording")
-                } footer: {
-                    if session.health?.hasCloudTranscription == true {
+                        .pickerStyle(.segmented)
                         Text(transcriptionQuality.detail)
+                            .rambleType(Theme.Text.meta)
+                            .foregroundStyle(Theme.Palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-
-                Section {
-                    NavigationLink("Privacy and data") { PrivacyView() }
-                    Toggle("Developer options", isOn: $showingAdvanced)
-                    if showingAdvanced {
-                        NavigationLink("Webhooks") { WebhooksView() }
-                    }
-                }
-
-                Section {
-                    Button("Sign out", role: .destructive) { confirmSignOut = true }
-                }
-            }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .task { integrations = (try? await APIClient.shared.integrations()) ?? [] }
-            .onChange(of: transcriptionQuality) { _, quality in
-                TranscriptionQuality.preferred = quality
-            }
-            .confirmationDialog("Sign out of Ramble?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-                Button("Sign out", role: .destructive) {
-                    Task {
-                        await session.signOut()
-                        dismiss()
-                    }
-                }
-            } message: {
-                Text("Recordings that haven't uploaded yet will stay on this device.")
             }
         }
     }
 
-    private var profileBinding: Binding<UserProfile> {
-        Binding(
-            get: { session.account?.profile ?? .other },
-            set: { profile in Task { _ = try? await APIClient.shared.updateProfile(profile) } }
-        )
+    private var appearanceSection: some View {
+        settingsSection("Appearance") {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppearanceSetting.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var privacy: some View {
+        settingsSection("Your voice and your data") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
+                privacyRow(
+                    "Your recordings",
+                    "The audio is uploaded and stored on Ramble's server so you can play it back. Playback goes through links that expire."
+                )
+                privacyRow(
+                    "Turning speech into text",
+                    session.isSampleMode
+                        ? "Currently a local stand-in \u{2014} no audio leaves the server for transcription."
+                        : "Your phone transcribes when it can. Otherwise the audio goes to a transcription provider to be turned into text."
+                )
+                privacyRow(
+                    "Making sense of it",
+                    session.isSampleMode
+                        ? "Currently a rule-based stand-in rather than a real model."
+                        : "Your transcript is sent to a language model to be structured. Ramble asks its providers not to retain or train on it."
+                )
+                privacyRow(
+                    "Calendar and reminders",
+                    "Handled entirely on this device through Apple's frameworks. Your calendar is never sent to Ramble's servers."
+                )
+                privacyRow(
+                    "Actions that reach other people",
+                    "Always require you to say yes first, every single time. Nothing is ever sent on your behalf without that."
+                )
+            }
+        }
+    }
+
+    private var signOut: some View {
+        Button("Sign out") { confirmSignOut = true }
+            .buttonStyle(SecondaryButtonStyle())
+    }
+
+    // MARK: - Building blocks
+
+    private func settingsSection(
+        _ title: String,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
+            SectionHeading(title)
+            content()
+        }
+        .padding(.top, Theme.Metrics.lg)
+        .overlay(alignment: .top) { Hairline() }
+    }
+
+    private func row(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .rambleType(Theme.Text.body)
+                .foregroundStyle(Theme.Palette.ink)
+            Spacer(minLength: Theme.Metrics.md)
+            Text(value)
+                .rambleType(Theme.Text.supporting)
+                .foregroundStyle(Theme.Palette.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func privacyRow(_ title: String, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Metrics.xs) {
+            Text(title)
+                .rambleType(Theme.Text.bodyStrong)
+                .foregroundStyle(Theme.Palette.ink)
+            Text(detail)
+                .rambleType(Theme.Text.supporting)
+                .foregroundStyle(Theme.Palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Data
+
+    private var available: [APIClient.IntegrationList.Item] {
+        integrations.filter(\.available)
+    }
+
+    private var unavailable: [APIClient.IntegrationList.Item] {
+        integrations.filter { !$0.available }
+    }
+
+    private func loadIntegrations() async {
+        do {
+            integrations = try await APIClient.shared.integrations()
+            integrationsError = nil
+        } catch {
+            integrationsError = error.localizedDescription
+        }
     }
 
     private func toggle(_ integration: APIClient.IntegrationList.Item) async {
@@ -125,7 +337,7 @@ struct SettingsView: View {
             }
             try? await APIClient.shared.connectIntegration(integration.provider)
         }
-        integrations = (try? await APIClient.shared.integrations()) ?? []
+        await loadIntegrations()
     }
 }
 
@@ -135,133 +347,74 @@ private struct IntegrationRow: View {
 
     @State private var isWorking = false
 
+    private var isConnected: Bool { integration.status == "connected" }
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(integration.name)
-                Text(integration.category)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Palette.muted)
+                    .rambleType(Theme.Text.body)
+                    .foregroundStyle(Theme.Palette.ink)
+                Text(isConnected ? "Connected" : integration.category)
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary)
             }
             Spacer()
             if isWorking {
                 ProgressView().controlSize(.small)
-            } else if !integration.available {
-                Text("Soon")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Palette.muted)
             } else {
-                Button(integration.status == "connected" ? "Disconnect" : "Connect") {
+                Button(isConnected ? "Disconnect" : "Connect") {
                     isWorking = true
                     Task {
                         await toggle()
                         isWorking = false
                     }
                 }
-                .font(Theme.Typography.secondary)
+                .rambleType(Theme.Text.meta)
+                .foregroundStyle(isConnected ? Theme.Palette.secondary : Theme.Palette.action)
                 .buttonStyle(.plain)
-                .foregroundStyle(integration.status == "connected" ? Theme.Palette.muted : Theme.Palette.accent)
+                .frame(minHeight: Theme.Metrics.minimumTouchTarget)
             }
         }
-        .disabled(!integration.available)
+        .padding(.vertical, Theme.Metrics.sm)
+        .overlay(alignment: .bottom) { Hairline() }
     }
 }
 
-/// What is still on the device and hasn't reached the server.
-private struct PendingUploadsView: View {
-    @State private var queue = CaptureQueue.shared
+/// Light, dark, or whatever the phone is doing. Stored on the device, since it
+/// is a property of this screen and not of the account.
+enum AppearanceSetting: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
 
-    var body: some View {
-        List {
-            if queue.pending.isEmpty {
-                Text("Everything's uploaded.")
-                    .foregroundStyle(Theme.Palette.muted)
-            } else {
-                ForEach(queue.pending) { capture in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(capture.recordedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-                        Text("\(capture.duration.durationLabel) · \(capture.lastError ?? "Waiting")")
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Palette.muted)
-                    }
-                }
-            }
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
         }
-        .navigationTitle("Waiting to upload")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            Button("Retry now") { queue.sync() }
-                .disabled(queue.pending.isEmpty)
+    }
+
+    private static let key = "app.ramble.appearance"
+
+    static var current: AppearanceSetting {
+        UserDefaults.standard.string(forKey: key).flatMap(AppearanceSetting.init) ?? .system
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
         }
+    }
+
+    func apply() {
+        UserDefaults.standard.set(rawValue, forKey: Self.key)
+        NotificationCenter.default.post(name: .appearanceChanged, object: nil)
     }
 }
 
-private struct PrivacyView: View {
-    @Environment(Session.self) private var session
-
-    var body: some View {
-        List {
-            Section {
-                Text("Ramble stores your recordings, transcripts, and everything extracted from them. Only you can read them.")
-                    .font(Theme.Typography.secondary)
-            }
-            Section("How it works") {
-                privacyRow("Your audio", "Stored privately. Played back through links that expire.")
-                privacyRow("Transcription", session.isSampleMode
-                    ? "Currently a local stand-in — no audio leaves the server."
-                    : "Sent to a transcription provider to be turned into text.")
-                privacyRow("Understanding", session.isSampleMode
-                    ? "Currently a local stand-in rather than a real model."
-                    : "Your transcript is sent to an AI provider to be structured.")
-                privacyRow("Calendar and reminders", "Handled entirely on this device. Never sent to our servers.")
-            }
-            Section {
-                Text("Nothing you record is used to train anyone's models.")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Palette.muted)
-            }
-        }
-        .navigationTitle("Privacy and data")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func privacyRow(_ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(Theme.Typography.body)
-            Text(detail)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Palette.muted)
-        }
-        .padding(.vertical, 2)
-    }
-}
-
-/// Advanced only. Most people should never see this screen.
-private struct WebhooksView: View {
-    var body: some View {
-        List {
-            Section {
-                Text("Send an HTTP request whenever something happens in Ramble — a recording is processed, a task is created, an action runs.")
-                    .font(Theme.Typography.secondary)
-                    .foregroundStyle(Theme.Palette.muted)
-            }
-            Section("Events") {
-                ForEach([
-                    "ramble.created", "ramble.transcribed", "ramble.processed",
-                    "task.created", "action.requested", "action.completed",
-                ], id: \.self) { event in
-                    Text(event)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(Theme.Palette.muted)
-                }
-            }
-            Section {
-                Text("Manage endpoints through the API: POST /v1/webhooks")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Palette.muted)
-            }
-        }
-        .navigationTitle("Webhooks")
-        .navigationBarTitleDisplayMode(.inline)
-    }
+extension Notification.Name {
+    static let appearanceChanged = Notification.Name("app.ramble.appearanceChanged")
 }

@@ -68,15 +68,54 @@ enum ProcessingState: String, Codable {
 
     var isTerminal: Bool { self == .processed || self == .failed }
 
-    /// What the user sees on a card while work is still happening.
+    /// What the user sees on a row while work is still happening.
     var label: String {
         switch self {
-        case .awaitingUpload: "Waiting for a connection"
-        case .uploaded, .transcribing: "Transcribing"
-        case .transcribed, .understanding: "Making sense of it"
-        case .embedding: "Almost done"
+        case .awaitingUpload: "Saved on your phone"
+        case .uploaded, .transcribing: "Finding the words\u{2026}"
+        case .transcribed, .understanding: "Finding the shape of it\u{2026}"
+        case .embedding: "Almost there\u{2026}"
         case .processed: "Ready"
         case .failed: "Couldn't finish"
+        }
+    }
+
+    /// The reassuring second line. The person was told to walk away, so the
+    /// wait has to explain itself without sounding like something is wrong.
+    var detail: String? {
+        switch self {
+        case .awaitingUpload: "It'll send when you're back online."
+        case .uploaded, .transcribing, .transcribed, .understanding, .embedding:
+            "Your recording is here. Understanding is on its way."
+        case .processed: nil
+        case .failed: "Your recording and transcript are safe."
+        }
+    }
+}
+
+/// Where a locally captured recording has got to. The recording exists from
+/// the moment it stops; this only describes how far it has travelled.
+enum UploadState: Equatable {
+    case storedLocally
+    case uploading
+    case waitingForConnection
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .storedLocally: "Saved on your phone"
+        case .uploading: "Sending\u{2026}"
+        case .waitingForConnection: "Waiting for a connection"
+        case .failed: "Couldn't send yet"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case .storedLocally: "Understanding starts once it uploads."
+        case .uploading: "Your recording is here. Understanding is on its way."
+        case .waitingForConnection: "It'll send by itself when you reconnect."
+        case .failed(let reason): reason
         }
     }
 }
@@ -191,12 +230,18 @@ struct ExtractedItem: Codable, Identifiable, Hashable {
     let sourceStartSeconds: Double?
     let sourceQuote: String?
     let correctedByUser: Bool
+    /// Present when the item arrived from a cross-ramble endpoint such as the
+    /// inbox, where a row has to be able to open the recording it came from.
+    let rambleId: String?
+    let rambleTitle: String?
 
     enum CodingKeys: String, CodingKey {
         case id, kind, title, body, attributes, status, confidence
         case sourceStartSeconds = "source_start_seconds"
         case sourceQuote = "source_quote"
         case correctedByUser = "corrected_by_user"
+        case rambleId = "ramble_id"
+        case rambleTitle = "ramble_title"
     }
 
     var dueDate: Date? {
@@ -213,32 +258,69 @@ struct EntityRef: Codable, Identifiable, Hashable {
 
 // MARK: - Actions
 
+/// The state machine an action moves through, server-side.
+enum ActionState: String, Codable {
+    case detected
+    case awaitingConfirmation = "awaiting_confirmation"
+    case approved, executing, completed, failed, cancelled
+
+    /// Plain phrasing, written for the person rather than the pipeline.
+    var label: String {
+        switch self {
+        case .detected, .awaitingConfirmation: "Waiting on you"
+        case .approved, .executing: "Running\u{2026}"
+        case .completed: "Done"
+        case .failed: "Didn't go through"
+        case .cancelled: "You said no"
+        }
+    }
+}
+
+/// Something Ramble could do off the back of a recording.
+///
+/// One type decodes all three places an action appears — inside a ramble, in
+/// the inbox, and in the history list — so the fields those endpoints don't
+/// carry are optional rather than duplicated into parallel models.
 struct RambleAction: Codable, Identifiable, Hashable {
     let id: String
     let type: String
     let parameters: JSONValue
-    let state: String
+    let state: ActionState
     let confidence: Double
     let intentClass: String
     let risk: String
-    let requiresConfirmation: Bool
+    let requiresConfirmation: Bool?
     let result: JSONValue?
     let error: String?
     let executedAt: Date?
+    let createdAt: Date?
+    /// The words this came from, and where in the audio they were said.
+    let sourceQuote: String?
+    let sourceStartSeconds: Double?
+    /// Set by the cross-ramble endpoints, so a row can open its recording.
+    let rambleId: String?
+    let rambleTitle: String?
+    /// "server" or "client" — whether the phone runs this through EventKit.
+    let target: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, parameters, state, confidence, risk, result, error
+        case id, type, parameters, state, confidence, risk, result, error, target
         case intentClass = "intent_class"
         case requiresConfirmation = "requires_confirmation"
         case executedAt = "executed_at"
+        case createdAt = "created_at"
+        case sourceQuote = "source_quote"
+        case sourceStartSeconds = "source_start_seconds"
+        case rambleId = "ramble_id"
+        case rambleTitle = "ramble_title"
     }
 
-    /// Plain phrasing for the confirmation card. The user never sees an action type.
+    /// Plain phrasing for the confirmation card. The user never sees a type.
     var label: String {
         switch type {
-        case "calendar.create_event": "Add to calendar"
+        case "calendar.create_event": "Add this to your calendar"
         case "calendar.update_event": "Change a calendar event"
-        case "reminder.create": "Add a reminder"
+        case "reminder.create": "Set a reminder"
         case "task.create": "Add a task"
         case "note.create": "Save a note"
         case "email.draft": "Draft an email"
@@ -247,29 +329,150 @@ struct RambleAction: Codable, Identifiable, Hashable {
         }
     }
 
+    /// The question form, used as the heading of a confirmation.
+    var question: String {
+        if let recipient, type.hasPrefix("email") {
+            return "Send \(recipient) this?"
+        }
+        switch type {
+        case "calendar.create_event": return "Put this on your calendar?"
+        case "calendar.update_event": return "Change this calendar event?"
+        case "reminder.create": return "Remind you about this?"
+        case "task.create": return "Add this to your tasks?"
+        case "note.create": return "Save this as a note?"
+        case "email.draft": return "Draft this email?"
+        case "email.send": return "Send this email?"
+        default: return label + "?"
+        }
+    }
+
     var systemImage: String {
         switch type {
         case "calendar.create_event", "calendar.update_event": "calendar"
         case "reminder.create": "bell"
         case "task.create": "checkmark.circle"
+        case "note.create": "text.alignleft"
         case "email.draft", "email.send": "envelope"
         default: "bolt"
         }
     }
 
-    /// The one-line description shown under the action's name.
-    var detail: String {
-        let title = parameters["title"]?.stringValue ?? parameters["subject"]?.stringValue ?? ""
-        guard let when = parameters["starts_at"]?.stringValue ?? parameters["due_at"]?.stringValue,
-              let date = ISO8601DateFormatter.flexible.date(from: when)
-        else { return title }
-        return title.isEmpty
-            ? date.formatted(.dateTime.weekday(.wide).hour().minute())
-            : "\(title) · \(date.formatted(.dateTime.weekday(.abbreviated).hour().minute()))"
+    /// Where this would actually land. Named as the person would name it.
+    var destination: String {
+        switch type {
+        case "calendar.create_event", "calendar.update_event": "Apple Calendar, on this device"
+        case "reminder.create": "Apple Reminders, on this device"
+        case "email.draft": "Your email drafts"
+        case "email.send": "Email"
+        default: "In Ramble"
+        }
     }
 
-    var isPending: Bool { state == "awaiting_confirmation" }
-    var isDone: Bool { state == "completed" }
+    var recipient: String? {
+        parameters["to"]?.stringValue
+            ?? parameters["recipient"]?.stringValue
+            ?? parameters["contact"]?.stringValue
+    }
+
+    var subject: String? {
+        parameters["subject"]?.stringValue
+    }
+
+    /// The exact text that would be sent or saved, where there is one.
+    var payload: String? {
+        parameters["body"]?.stringValue ?? parameters["notes"]?.stringValue
+    }
+
+    var scheduledAt: Date? {
+        guard let raw = parameters["starts_at"]?.stringValue ?? parameters["due_at"]?.stringValue
+        else { return nil }
+        return ISO8601DateFormatter.flexible.date(from: raw)
+    }
+
+    /// The one-line description shown under the action's name.
+    var detail: String {
+        let title = parameters["title"]?.stringValue ?? subject ?? ""
+        guard let date = scheduledAt else { return title }
+        let when = date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return title.isEmpty ? when : "\(title) \u{00B7} \(when)"
+    }
+
+    /// Everything the person is entitled to inspect before saying yes.
+    var inspection: [(label: String, value: String)] {
+        var fields: [(String, String)] = [("Where it goes", destination)]
+        if let recipient { fields.append(("To", recipient)) }
+        if let subject { fields.append(("Subject", subject)) }
+        if let date = scheduledAt {
+            fields.append(("When", date.formatted(.dateTime.weekday(.wide).month().day().hour().minute())))
+        }
+        if let payload, !payload.isEmpty { fields.append(("Message", payload)) }
+        return fields
+    }
+
+    /// Why Ramble is asking rather than just doing it. The safety model only
+    /// works if the person can see the difference between "you told me to"
+    /// and "I think you might want this".
+    var reason: String? {
+        switch intentClass {
+        case "external_communication":
+            "This reaches someone outside your own data, so Ramble always asks."
+        case "information":
+            "It sounded like a thought rather than an instruction."
+        case "intention":
+            "It sounded like something you meant to do yourself."
+        default:
+            confidence < 0.75 ? "Ramble wasn't certain it understood this one." : nil
+        }
+    }
+
+    /// The affirmative and negative wording, matched to what would happen.
+    /// A generic "Confirm" hides the consequence, which is the one thing the
+    /// person is being asked to weigh.
+    var confirmTitle: String {
+        switch type {
+        case "email.send": "Yes, send"
+        case "email.draft": "Yes, draft it"
+        case "calendar.create_event", "calendar.update_event": "Yes, add it"
+        case "reminder.create": "Yes, remind me"
+        case "task.create": "Yes, add it"
+        case "note.create": "Yes, save it"
+        default: "Yes, do it"
+        }
+    }
+
+    var declineTitle: String {
+        switch type {
+        case "email.send": "No, don't send"
+        case "email.draft": "No, don't draft it"
+        case "calendar.create_event", "calendar.update_event": "No, don't add it"
+        case "reminder.create": "No, don't remind me"
+        default: "No, skip it"
+        }
+    }
+
+    /// Past tense for the "already taken care of" list.
+    var completedLabel: String {
+        switch type {
+        case "calendar.create_event": "Added to your calendar."
+        case "calendar.update_event": "Updated your calendar."
+        case "reminder.create": "Saved a reminder."
+        case "task.create": "Added a task."
+        case "note.create": "Saved a note."
+        case "email.draft": "Saved a draft."
+        case "email.send": "Sent."
+        default: "Done."
+        }
+    }
+
+    var isPending: Bool { state == .awaitingConfirmation || state == .detected }
+    var isDone: Bool { state == .completed }
+    var isRunning: Bool { state == .approved || state == .executing }
+    var isFailed: Bool { state == .failed }
+    var isDeclined: Bool { state == .cancelled }
+    /// True when the phone, not the server, carries this out.
+    var runsOnDevice: Bool {
+        target == "client" || type.hasPrefix("calendar.") || type == "reminder.create"
+    }
 }
 
 /// An action the device must run itself through EventKit.
@@ -395,13 +598,23 @@ struct AskAnswer: Codable {
         let sourceKind: String
 
         var id: String { rambleId + quote.prefix(16) }
+
+        /// The server sends this as a string. Parsing here rather than in the
+        /// view keeps the "no usable date" case in one place.
+        var date: Date? {
+            ISO8601DateFormatter.flexible.date(from: recordedAt)
+                ?? ISO8601DateFormatter.plain.date(from: recordedAt)
+        }
     }
 }
 
 // MARK: - Inbox
 
 struct Inbox: Codable {
-    let pendingActions: [PendingAction]
+    /// Everything waiting on an explicit yes, across every recording.
+    let pendingActions: [RambleAction]
+    /// Everything still open: tasks, reminders, commitments, follow-ups, and
+    /// the questions the person asked themselves and hasn't answered.
     let openItems: [ExtractedItem]
 
     enum CodingKeys: String, CodingKey {
@@ -409,22 +622,15 @@ struct Inbox: Codable {
         case openItems = "open_items"
     }
 
-    struct PendingAction: Codable, Identifiable, Hashable {
-        let id: String
-        let type: String
-        let parameters: JSONValue
-        let confidence: Double
-        let intentClass: String
-        let risk: String
-        let rambleId: String
-        let rambleTitle: String?
+    static let empty = Inbox(pendingActions: [], openItems: [])
 
-        enum CodingKeys: String, CodingKey {
-            case id, type, parameters, confidence, risk
-            case intentClass = "intent_class"
-            case rambleId = "ramble_id"
-            case rambleTitle = "ramble_title"
-        }
+    var isEmpty: Bool { pendingActions.isEmpty && openItems.isEmpty }
+
+    /// Open items grouped by kind, in the order the person owes them.
+    var groupedOpenItems: [(kind: ItemKind, items: [ExtractedItem])] {
+        Dictionary(grouping: openItems, by: \.kind)
+            .map { (kind: $0.key, items: $0.value) }
+            .sorted { ($0.kind.sortRank, $0.kind.label) < ($1.kind.sortRank, $1.kind.label) }
     }
 }
 

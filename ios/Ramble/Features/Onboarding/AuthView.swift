@@ -18,96 +18,120 @@ struct AuthView: View {
 
     var body: some View {
         ZStack {
-            Theme.Palette.background.ignoresSafeArea()
+            Theme.Palette.paper.ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 0) {
-                Spacer()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("ramble")
+                        .font(.system(size: 17, weight: .semibold, design: .serif))
+                        .foregroundStyle(Theme.Palette.secondary)
+                        .padding(.top, Theme.Metrics.xxl)
 
-                Text("Ramble")
-                    .font(.system(size: 34, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.text)
-                Text("Just ramble.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Palette.muted)
-                    .padding(.top, 4)
+                    Text(isRegistering ? "Somewhere to\nthink out loud." : "Welcome back.")
+                        .rambleType(Theme.Text.screenTitle)
+                        .foregroundStyle(Theme.Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Theme.Metrics.xl)
 
-                VStack(spacing: 10) {
-                    TextField("Email", text: $email)
-                        .textContentType(.emailAddress)
-                        .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focus, equals: .email)
-                        .submitLabel(.next)
-                        .onSubmit { focus = .password }
-                        .fieldStyle()
+                    Text(isRegistering
+                         ? "Your recordings are yours. Nothing you say is used to train anyone's models."
+                         : "Everything you've said is still here.")
+                        .rambleType(Theme.Text.supporting)
+                        .foregroundStyle(Theme.Palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Theme.Metrics.md)
 
-                    SecureField("Password", text: $password)
-                        .textContentType(isRegistering ? .newPassword : .password)
-                        .focused($focus, equals: .password)
-                        .submitLabel(.go)
-                        .onSubmit { if canSubmit { submit() } }
-                        .fieldStyle()
-                }
-                .padding(.top, 32)
-
-                if isRegistering && !password.isEmpty && password.count < 8 {
-                    Text("At least 8 characters.")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Palette.muted)
-                        .padding(.top, 6)
-                }
-
-                if let error = session.errorMessage {
-                    Text(error)
-                        .font(Theme.Typography.secondary)
-                        .foregroundStyle(Theme.Palette.accent)
-                        .padding(.top, 10)
-                }
-
-                Button(action: submit) {
-                    HStack {
-                        if isWorking { ProgressView().controlSize(.small).tint(.white) }
-                        Text(isRegistering ? "Create account" : "Sign in")
+                    VStack(alignment: .leading, spacing: Theme.Metrics.md) {
+                        field("Email") {
+                            TextField("you@example.com", text: $email)
+                                .textContentType(.emailAddress)
+                                .keyboardType(.emailAddress)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .focused($focus, equals: .email)
+                                .submitLabel(.next)
+                                .onSubmit { focus = .password }
+                        }
+                        field("Password") {
+                            SecureField("At least 8 characters", text: $password)
+                                .textContentType(isRegistering ? .newPassword : .password)
+                                .focused($focus, equals: .password)
+                                .submitLabel(.go)
+                                .onSubmit { if canSubmit { submit() } }
+                        }
                     }
-                    .font(Theme.Typography.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(canSubmit ? Theme.Palette.accent : Theme.Palette.muted.opacity(0.35))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cornerRadius, style: .continuous))
-                }
-                .disabled(!canSubmit)
-                .padding(.top, 20)
+                    .padding(.top, Theme.Metrics.xxl)
 
-                Button(isRegistering ? "I already have an account" : "Create an account") {
-                    withAnimation { isRegistering.toggle() }
-                }
-                .font(Theme.Typography.secondary)
-                .foregroundStyle(Theme.Palette.muted)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 16)
+                    if let error = session.errorMessage {
+                        Text(error)
+                            .rambleType(Theme.Text.supporting)
+                            .foregroundStyle(Theme.Palette.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, Theme.Metrics.md)
+                    }
 
-                #if DEBUG
-                // Local development only: fills in the account created by
-                // `npm run seed`, so the seeded timeline is one tap away.
-                Button("Use the demo account") {
-                    email = "demo@ramble.app"
-                    password = "rambledemo"
-                    submit()
-                }
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Palette.muted.opacity(0.7))
-                .frame(maxWidth: .infinity)
-                .padding(.top, 24)
-                #endif
+                    Button(action: submit) {
+                        HStack(spacing: Theme.Metrics.sm) {
+                            if isWorking {
+                                ProgressView().controlSize(.small).tint(Theme.Palette.onAction)
+                            }
+                            Text(isRegistering ? "Create account" : "Sign in")
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle(isEnabled: canSubmit))
+                    .disabled(!canSubmit)
+                    .padding(.top, Theme.Metrics.xl)
 
-                Spacer()
-                Spacer()
+                    Button(isRegistering ? "I already have an account" : "Create an account") {
+                        withAnimation(.ramble()) {
+                            isRegistering.toggle()
+                        }
+                    }
+                    .rambleType(Theme.Text.supporting)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .frame(maxWidth: .infinity, minHeight: Theme.Metrics.minimumTouchTarget)
+                    .padding(.top, Theme.Metrics.md)
+
+                    #if DEBUG
+                    // Local development only: the account created by `npm run
+                    // seed`, so a seeded history is one tap away.
+                    Button("Use the demo account") {
+                        email = "demo@ramble.app"
+                        password = "rambledemo"
+                        submit()
+                    }
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary.opacity(0.7))
+                    .frame(maxWidth: .infinity, minHeight: Theme.Metrics.minimumTouchTarget)
+                    #endif
+                }
+                .screenPadding()
+                .padding(.bottom, Theme.Metrics.xxl)
             }
-            .padding(.horizontal, 28)
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
         }
-        .onTapGesture { focus = nil }
+    }
+
+    private func field(_ label: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
+            Text(label)
+                .rambleType(Theme.Text.eyebrow)
+                .foregroundStyle(Theme.Palette.secondary)
+            content()
+                .rambleType(Theme.Text.body)
+                .foregroundStyle(Theme.Palette.ink)
+                .padding(.horizontal, Theme.Metrics.md)
+                .frame(minHeight: Theme.Metrics.minimumTouchTarget)
+                .background(Theme.Palette.raised)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Metrics.inputRadius, style: .continuous)
+                        .strokeBorder(Theme.Palette.divider, lineWidth: 1)
+                )
+                .clipShape(
+                    RoundedRectangle(cornerRadius: Theme.Metrics.inputRadius, style: .continuous)
+                )
+        }
     }
 
     private func submit() {
@@ -121,21 +145,5 @@ struct AuthView: View {
             }
             isWorking = false
         }
-    }
-}
-
-private extension View {
-    func fieldStyle() -> some View {
-        self
-            .font(Theme.Typography.body)
-            .foregroundStyle(Theme.Palette.text)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .background(Theme.Palette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Metrics.cornerRadius, style: .continuous)
-                    .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-            )
     }
 }

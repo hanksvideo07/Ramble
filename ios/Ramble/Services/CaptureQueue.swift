@@ -45,6 +45,16 @@ final class CaptureQueue {
 
     var hasPending: Bool { !pending.isEmpty }
 
+    /// How far a queued recording has got, in the terms the history shows.
+    /// The audio is already safe in every one of these states; only its
+    /// journey to the server differs.
+    func state(for capture: PendingCapture) -> UploadState {
+        if let error = capture.lastError, capture.attempts > 0 { return .failed(error) }
+        if !isOnline { return .waitingForConnection }
+        if isSyncing { return .uploading }
+        return .storedLocally
+    }
+
     // MARK: - Enqueue
 
     /// Adds a finished recording. Called the moment the user stops, before any

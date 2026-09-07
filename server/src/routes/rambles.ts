@@ -337,9 +337,12 @@ export async function rambleRoutes(app: FastifyInstance): Promise<void> {
         [id, user.id],
       ),
       pool.query(
-        `SELECT id, type, parameters, state, confidence, intent_class, risk,
-                requires_confirmation, result, error, executed_at
-           FROM actions WHERE ramble_id = $1 AND user_id = $2 ORDER BY created_at`,
+        `SELECT a.id, a.type, a.parameters, a.state, a.confidence, a.intent_class, a.risk,
+                a.requires_confirmation, a.result, a.error, a.executed_at,
+                i.source_quote, i.source_start_seconds
+           FROM actions a
+           LEFT JOIN extracted_items i ON i.id = a.extracted_item_id
+          WHERE a.ramble_id = $1 AND a.user_id = $2 ORDER BY a.created_at`,
         [id, user.id],
       ),
       pool.query<{ storage_key: string }>(

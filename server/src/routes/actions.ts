@@ -25,8 +25,11 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
     const { rows } = await pool.query(
       `SELECT a.id, a.type, a.parameters, a.state, a.confidence, a.intent_class, a.risk,
               a.requires_confirmation, a.result, a.error, a.executed_at, a.created_at,
-              a.ramble_id, r.title AS ramble_title
-         FROM actions a JOIN rambles r ON r.id = a.ramble_id
+              a.ramble_id, r.title AS ramble_title,
+              i.source_quote, i.source_start_seconds
+         FROM actions a
+         JOIN rambles r ON r.id = a.ramble_id
+         LEFT JOIN extracted_items i ON i.id = a.extracted_item_id
         WHERE a.user_id = $1 ${filter}
         ORDER BY a.created_at DESC LIMIT $${params.length}`,
       params,

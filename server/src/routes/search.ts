@@ -103,20 +103,30 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
   app.get('/v1/inbox', async (request) => {
     const user = await requireUser(request);
     const [actions, tasks] = await Promise.all([
+      // The source quote and its timestamp live on the extracted item the
+      // action came from, and the confirmation card is not honest without
+      // them: approving something you cannot trace back to your own words is
+      // exactly what the guide forbids.
       pool.query(
         `SELECT a.id, a.type, a.parameters, a.confidence, a.intent_class, a.risk,
-                a.state, a.ramble_id, r.title AS ramble_title, a.created_at
-           FROM actions a JOIN rambles r ON r.id = a.ramble_id
+                a.state, a.ramble_id, r.title AS ramble_title, a.created_at,
+                i.source_quote, i.source_start_seconds
+           FROM actions a
+           JOIN rambles r ON r.id = a.ramble_id
+           LEFT JOIN extracted_items i ON i.id = a.extracted_item_id
           WHERE a.user_id = $1 AND a.state = 'awaiting_confirmation'
           ORDER BY a.created_at DESC LIMIT 50`,
         [user.id],
       ),
       pool.query(
-        `SELECT id, kind, title, body, attributes, ramble_id, created_at
-           FROM extracted_items
-          WHERE user_id = $1 AND status = 'open'
-            AND kind IN ('task','reminder','commitment','follow_up')
-          ORDER BY (attributes->>'due_at') NULLS LAST, created_at DESC
+        `SELECT i.id, i.kind, i.title, i.body, i.attributes, i.status, i.confidence,
+                i.source_start_seconds, i.source_quote, i.corrected_by_user,
+                i.ramble_id, r.title AS ramble_title, i.created_at
+           FROM extracted_items i
+           JOIN rambles r ON r.id = i.ramble_id
+          WHERE i.user_id = $1 AND i.status = 'open'
+            AND i.kind IN ('task','reminder','commitment','follow_up','question')
+          ORDER BY (i.attributes->>'due_at') NULLS LAST, i.created_at DESC
           LIMIT 50`,
         [user.id],
       ),
