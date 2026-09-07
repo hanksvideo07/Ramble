@@ -39,11 +39,8 @@ final class Recorder {
     /// no hint that a previous attempt is the reason.
     private var engine: AVAudioEngine?
     private var audioFile: AVAudioFile?
-    private var fileConverter: AVAudioConverter?
-    private var fileFormat: AVAudioFormat?
-    /// Set from the audio thread if a write fails, so the failure surfaces
-    /// while the person is still talking rather than after they stop.
-    private let writeFailure = FailureBox()
+    /// All state the realtime audio thread touches.
+    private let sink = Sink()
     private var startedAt: Date?
     private var displayTimer: Timer?
 
@@ -51,7 +48,6 @@ final class Recorder {
     //
     // Held as plain closures rather than typed properties because the analyzer
     // types are iOS 26 only, and this class has to compile for iOS 18.
-    private var feedAnalyzer: ((AVAudioPCMBuffer) -> Void)?
     private var finishAnalyzer: (() -> Void)?
     private var transcriptionTask: Task<Void, Never>?
 
@@ -68,8 +64,6 @@ final class Recorder {
 
     private let levelWindow = 48
     private var displayedLevel: CGFloat = 0
-    /// Written on the audio thread, read on the main actor.
-    private let levelBox = LevelBox()
 
     var isRecording: Bool { state == .recording }
 
@@ -136,14 +130,21 @@ final class Recorder {
                 throw RecorderError.cannotCreateFile(error)
             }
             audioFile = file
-            fileFormat = file.processingFormat
+            sink.begin(file: file)
+            // Live transcription needs the real input format, which is only
+            // known once buffers start arriving.
+            sink.onFirstBuffer = { [weak self] format in
+                Task { @MainActor in self?.startLiveTranscription(inputFormat: format) }
+            }
 
             // A nil format means "whatever this node is actually running at".
             // Passing a format read beforehand is the usual cause of
             // engine.start() failing: activating the session can renegotiate
             // the hardware, leaving the value stale and the tap mismatched.
-            input.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
-                self?.handle(buffer: buffer)
+            // The tap talks only to the sink: no actor isolation is involved,
+            // because a realtime thread cannot participate in it.
+            input.installTap(onBus: 0, bufferSize: 4096, format: nil) { [sink] buffer, _ in
+                sink.accept(buffer)
             }
 
             engine.prepare()
@@ -259,70 +260,130 @@ final class Recorder {
         }
         engine = nil
 
+        sink.setFeed(nil)
         finishAnalyzer?()
         finishAnalyzer = nil
-        feedAnalyzer = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
 
         // Closing the file flushes the encoder's remaining frames.
+        sink.onFirstBuffer = nil
+        sink.finish()
         audioFile = nil
-        fileConverter = nil
-        fileFormat = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     // MARK: - Audio thread
 
-    /// Runs on the realtime audio thread. Deliberately does no main-actor work:
-    /// the level is dropped into a lock-protected box and picked up by the
-    /// display timer instead.
-    private nonisolated func handle(buffer: AVAudioPCMBuffer) {
-        // The write comes first and is never conditional on anything below it.
-        writeToFile(buffer)
-        levelBox.store(Self.peakLevel(of: buffer))
-        yieldToAnalyzer(buffer)
-    }
+    /// Everything the realtime audio thread touches.
+    ///
+    /// Deliberately not actor-isolated. A realtime thread cannot hop to an
+    /// actor, and `MainActor.assumeIsolated` is a precondition rather than a
+    /// hop — calling it from here traps the process instantly, which is
+    /// exactly what it did. State the audio thread needs therefore lives
+    /// behind a plain lock, and the main actor reads from it on a timer.
+    final class Sink: @unchecked Sendable {
+        private let lock = NSLock()
 
-    private nonisolated func writeToFile(_ buffer: AVAudioPCMBuffer) {
-        MainActor.assumeIsolated {
-            guard let file = audioFile, let format = fileFormat else { return }
+        private var file: AVAudioFile?
+        private var converter: AVAudioConverter?
+        private var fileFormat: AVAudioFormat?
+        private var failure: String?
+        private var peak: CGFloat = 0
+        private var feed: ((AVAudioPCMBuffer) -> Void)?
+        private var sawFirstBuffer = false
 
-            // Bound on the first buffer rather than up front, because this is
-            // the only point where the real input format is known for certain.
-            if fileConverter == nil {
-                guard let converter = AVAudioConverter(from: buffer.format, to: format) else {
-                    writeFailure.record(RecorderError.unsupportedInput(buffer.format).localizedDescription)
-                    return
-                }
-                fileConverter = converter
-                // The transcriber needs the same format, and now it exists.
-                startLiveTranscription(inputFormat: buffer.format)
-            }
-            guard let converter = fileConverter else { return }
-            guard let converted = Self.convert(buffer, using: converter, to: format) else {
-                writeFailure.record("The microphone's audio could not be converted for saving.")
+        /// Called once, on the main actor, with the format buffers actually
+        /// arrive in — the only point where it is known for certain.
+        var onFirstBuffer: (@Sendable (AVAudioFormat) -> Void)?
+
+        func begin(file: AVAudioFile) {
+            lock.lock()
+            self.file = file
+            self.fileFormat = file.processingFormat
+            lock.unlock()
+        }
+
+        func setFeed(_ feed: ((AVAudioPCMBuffer) -> Void)?) {
+            lock.lock()
+            self.feed = feed
+            lock.unlock()
+        }
+
+        /// The tap's entry point. Writing comes first and is never conditional
+        /// on anything after it.
+        func accept(_ buffer: AVAudioPCMBuffer) {
+            lock.lock()
+
+            guard let file, let fileFormat else {
+                lock.unlock()
                 return
             }
-            do {
-                try file.write(from: converted)
-            } catch {
-                // A failed write means the recording is being lost right now.
-                // It is reported rather than swallowed.
-                writeFailure.record(error.localizedDescription)
+
+            if converter == nil {
+                guard let made = AVAudioConverter(from: buffer.format, to: fileFormat) else {
+                    failure = RecorderError.unsupportedInput(buffer.format).localizedDescription
+                    lock.unlock()
+                    return
+                }
+                converter = made
+            }
+            let activeConverter = converter!
+
+            if let converted = Recorder.convert(buffer, using: activeConverter, to: fileFormat) {
+                do {
+                    try file.write(from: converted)
+                } catch {
+                    // A failed write means the recording is being lost right
+                    // now. Reported rather than swallowed.
+                    if failure == nil { failure = error.localizedDescription }
+                }
+            } else if failure == nil {
+                failure = "The microphone's audio could not be converted for saving."
+            }
+
+            peak = max(peak, Recorder.peakLevel(of: buffer))
+
+            let feedNow = feed
+            let notifyFormat = sawFirstBuffer ? nil : buffer.format
+            sawFirstBuffer = true
+            lock.unlock()
+
+            // Outside the lock: neither of these should block the audio thread
+            // holding it.
+            feedNow?(buffer)
+            if let notifyFormat, let onFirstBuffer {
+                onFirstBuffer(notifyFormat)
             }
         }
-    }
 
-    private nonisolated func yieldToAnalyzer(_ buffer: AVAudioPCMBuffer) {
-        MainActor.assumeIsolated {
-            feedAnalyzer?(buffer)
+        /// Reads and clears, so a frame with no audio decays instead of
+        /// repeating the last peak forever.
+        func takePeak() -> CGFloat {
+            lock.lock()
+            defer { peak = 0; lock.unlock() }
+            return peak
+        }
+
+        func takeFailure() -> String? {
+            lock.lock()
+            defer { failure = nil; lock.unlock() }
+            return failure
+        }
+
+        func finish() {
+            lock.lock()
+            file = nil
+            converter = nil
+            fileFormat = nil
+            feed = nil
+            lock.unlock()
         }
     }
 
     /// Peak amplitude, which tracks speech far more responsively than an
     /// average and is what makes the waveform feel connected to the voice.
-    private nonisolated static func peakLevel(of buffer: AVAudioPCMBuffer) -> CGFloat {
+    fileprivate nonisolated static func peakLevel(of buffer: AVAudioPCMBuffer) -> CGFloat {
         guard let channel = buffer.floatChannelData?[0] else { return 0 }
         let count = Int(buffer.frameLength)
         guard count > 0 else { return 0 }
@@ -350,7 +411,7 @@ final class Recorder {
         // Stop immediately if audio has stopped reaching disk. Continuing to
         // show a running timer over a broken recording is the worst outcome
         // available.
-        if let failure = writeFailure.take() {
+        if let failure = sink.takeFailure() {
             teardown()
             state = .failed(failure)
             return
@@ -358,7 +419,7 @@ final class Recorder {
 
         elapsed = Date().timeIntervalSince(startedAt)
 
-        let incoming = levelBox.take()
+        let incoming = sink.takePeak()
 
         // Rise instantly to a new peak, fall exponentially away from it. The
         // asymmetry is what makes speech look like speech: attacks are sharp,
@@ -410,7 +471,7 @@ final class Recorder {
             let analyzer = SpeechAnalyzer(inputSequence: stream, modules: [transcriber])
 
             await MainActor.run {
-                self.feedAnalyzer = { buffer in
+                self.sink.setFeed { buffer in
                     guard let converted = Self.convert(buffer, using: converter, to: format) else { return }
                     continuation.yield(AnalyzerInput(buffer: converted))
                 }
@@ -516,42 +577,3 @@ enum RecorderError: LocalizedError {
     }
 }
 
-/// Carries a write failure from the audio thread to the display timer.
-private final class FailureBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var message: String?
-
-    func record(_ text: String) {
-        lock.lock()
-        // Keep the first failure; later ones are consequences of it.
-        if message == nil { message = text }
-        lock.unlock()
-    }
-
-    func take() -> String? {
-        lock.lock()
-        defer { message = nil; lock.unlock() }
-        return message
-    }
-}
-
-/// Carries the newest level from the audio thread to the display timer.
-/// A lock rather than an actor because the audio thread must never await.
-private final class LevelBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: CGFloat = 0
-
-    func store(_ level: CGFloat) {
-        lock.lock()
-        value = max(value, level)
-        lock.unlock()
-    }
-
-    /// Reads and clears, so a frame with no audio decays instead of repeating
-    /// the last peak forever.
-    func take() -> CGFloat {
-        lock.lock()
-        defer { value = 0; lock.unlock() }
-        return value
-    }
-}
