@@ -107,14 +107,20 @@ export function capabilityReport() {
   return {
     understanding: config.openrouter.apiKey ? `openrouter:${config.openrouter.understandingModel}` : 'mock',
     answering: config.openrouter.apiKey ? `openrouter:${config.openrouter.answerModel}` : 'mock',
-    transcription:
+    // Transcription normally happens on the device; this is only what the
+    // server would fall back to for a recording that arrives without one.
+    transcription_fallback:
       config.transcription.provider === 'deepgram' && config.transcription.deepgramKey
         ? 'deepgram'
         : config.transcription.provider === 'openai' && config.transcription.openaiKey
           ? 'openai'
           : 'mock',
     embedding:
-      config.embedding.provider === 'openai' && config.embedding.openaiKey ? 'openai' : 'mock',
+      config.embedding.provider === 'device'
+        ? `device:${config.embedding.model}@${config.embedding.deviceRevision}`
+        : config.embedding.provider === 'openai' && config.embedding.openaiKey
+          ? 'openai'
+          : 'mock',
     calendar: 'apple_local+google_stub',
   };
 }

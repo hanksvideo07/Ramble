@@ -40,18 +40,20 @@ avoid colliding with anything already on the usual ports.
 cp .env.example server/.env
 ```
 
-It runs with no API keys at all. Every provider falls back to a stand-in, and
-anything produced that way is labelled **SAMPLE** in the app rather than passed
-off as real. To get genuine understanding, set:
+**One key, and only one.** Transcription, embeddings, calendar, and reminders
+all run on the device, so the only thing the server needs is a model to do the
+understanding:
 
 | Variable | What it turns on |
 |---|---|
-| `ANTHROPIC_API_KEY` | Real extraction and Ask Ramble answers |
-| `DEEPGRAM_API_KEY` + `TRANSCRIPTION_PROVIDER=deepgram` | Real transcription |
-| `OPENAI_API_KEY` + `EMBEDDING_PROVIDER=openai` | Real semantic search |
+| `OPENROUTER_API_KEY` | Real extraction and Ask Ramble answers |
 
-Nothing else is required. Calendar and reminders need no keys — they run
-on-device through EventKit.
+Without it everything still works, but extraction is a rule-based stand-in and
+anything it produces is labelled **SAMPLE** in the app rather than passed off
+as real.
+
+Optional, and only as a fallback for a recording that arrives without a
+device transcript: `DEEPGRAM_API_KEY` with `TRANSCRIPTION_PROVIDER=deepgram`.
 
 ### 3. Run the server
 
@@ -80,9 +82,12 @@ curl -s localhost:8798/v1/health | jq
 open ios/Ramble.xcodeproj
 ```
 
-Build to a simulator and run. The simulator reaches the server on `localhost`
-automatically; a physical device needs `RAMBLE_API_URL` set to your Mac's LAN
-address.
+The app points at the deployed server by default, so building to your phone
+needs no setup. Set `RAMBLE_API_URL` in the scheme's environment to use a local
+server instead.
+
+The deployment lives at `https://ramble-api-production.up.railway.app` —
+Postgres with pgvector, and audio on a persistent volume.
 
 In a DEBUG build, **Use the demo account** on the sign-in screen fills in the
 seeded credentials.
@@ -95,7 +100,7 @@ seeded credentials.
 cd server && npm test
 ```
 
-38 tests. The interesting ones are not the unit tests but the behaviors the
+39 tests. The interesting ones are not the unit tests but the behaviors the
 product depends on:
 
 - one recording producing many different object types
@@ -104,6 +109,8 @@ product depends on:
 - reprocessing being idempotent, and never overwriting a user's correction
 - a failed stage leaving the transcript intact and resuming from that stage
 - one user's search never reaching another user's data
+- a paraphrase finding nothing until the device supplies vectors, then finding
+  it — the on-device round trip, end to end
 
 ---
 
@@ -181,6 +188,9 @@ distance are not on the same scale, so only the orderings are compared):
 | `GET /v1/entities/:id` | Entity page |
 | `POST /v1/actions/:id/confirm` | Approve a pending action |
 | `GET /v1/inbox` | Everything still waiting on you |
+| `POST /v1/rambles/:id/transcript` | Transcript produced on the device |
+| `GET /v1/embeddings/pending` | Units still awaiting a vector |
+| `POST /v1/embeddings` | Vectors computed on the device |
 | `POST /v1/webhooks` | Developer webhooks (signed, with retries) |
 
 ---
@@ -196,6 +206,43 @@ ramble://search
 ramble://ask?q=What%20did%20I%20decide%20about%20pricing
 ramble://ramble/<id>
 ```
+
+---
+
+## What runs where
+
+Three of the four AI jobs happen on the phone. That is not a cost dodge — it is
+what lets the app work with no signal, and what keeps your recordings from
+being sent anywhere to be understood.
+
+| | Where | Why |
+|---|---|---|
+| **Transcription** | Device — `SpeechTranscriber` (iOS 26) | Free, offline, and audio is never sent away to be read |
+| **Embeddings** | Device — `NLContextualEmbedding` | Same, and the query never leaves either |
+| **Calendar / reminders** | Device — EventKit | Your calendar never reaches the server at all |
+| **Understanding** | Server — OpenRouter | The one job that genuinely needs a large model |
+
+`FoundationModels` was the obvious candidate for on-device embeddings and turns
+out to be generation-only — it has no embedding API. `NLContextualEmbedding` is
+the one that does.
+
+### How on-device embeddings stay coherent
+
+Vectors are only comparable within one model at one revision. Mixing two is
+worse than having none, because search keeps working while quietly returning
+nonsense. So:
+
+- The **server decides what is searchable.** It owns chunking, and two
+  implementations of that rule would drift apart. It writes each unit with a
+  NULL vector.
+- The **device only embeds what it is handed** — the same pattern as the
+  pending-actions queue. Ask what is outstanding, do it, post it back.
+- A **handshake** checks width and revision on first sync. A width mismatch is
+  refused outright; a revision bump clears the affected vectors so they are
+  re-embedded rather than silently mixed.
+
+Until the device catches up, lexical and structured search work normally. Only
+paraphrase search — *"that insurance company I was pitching"* — waits.
 
 ---
 

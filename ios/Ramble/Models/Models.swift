@@ -472,6 +472,11 @@ struct HealthReport: Codable {
     /// True when understanding is a stand-in rather than a real model, so the
     /// UI can say so instead of passing off sample output as real.
     var isUsingMockUnderstanding: Bool { capabilities["understanding"] == "mock" }
+
+    /// True once the server expects the device to supply embedding vectors.
+    var usesOnDeviceEmbeddings: Bool {
+        capabilities["embedding"]?.hasPrefix("device:") ?? false
+    }
 }
 
 /// One timed span of a transcript produced on the device. Mirrors the shape
