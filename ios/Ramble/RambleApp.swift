@@ -12,10 +12,22 @@ struct RambleApp: App {
                 .tint(Theme.Palette.action)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { DeepLink.shared.handle($0) }
-                .task { CrashReporter.shared.start() }
+                .task {
+                    CrashReporter.shared.start()
+                    // Pick up transfers the system finished while the app was
+                    // not running.
+                    await BackgroundUploader.shared.resume()
+                    CaptureQueue.shared.sync()
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .appearanceChanged)) { _ in
                     appearance = AppearanceSetting.current
                 }
+        }
+        // The system relaunches the app to hand over finished transfers. This
+        // is where it is told we are done with them, which is what lets it
+        // suspend us again rather than keeping the process alive.
+        .backgroundTask(.urlSession(BackgroundUploader.sessionIdentifier)) {
+            await BackgroundUploader.shared.resume()
         }
     }
 }

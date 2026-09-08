@@ -49,6 +49,9 @@ final class CaptureQueue {
     /// The audio is already safe in every one of these states; only its
     /// journey to the server differs.
     func state(for capture: PendingCapture) -> UploadState {
+        // A transfer the system is carrying is uploading even when this app is
+        // idle — which is the whole point of it being a background transfer.
+        if BackgroundUploader.shared.isUploading(capture.id) { return .uploading }
         if let error = capture.lastError, capture.attempts > 0 { return .failed(error) }
         if !isOnline { return .waitingForConnection }
         if isSyncing { return .uploading }
@@ -77,7 +80,12 @@ final class CaptureQueue {
     func sync() {
         guard !isSyncing, !pending.isEmpty, isOnline else { return }
         syncTask?.cancel()
-        syncTask = Task { await performSync() }
+        syncTask = Task {
+            // Reconnect to anything the system is still carrying from a
+            // previous launch first, or it would be started a second time.
+            await BackgroundUploader.shared.resume()
+            await performSync()
+        }
     }
 
     private func performSync() async {
@@ -93,9 +101,14 @@ final class CaptureQueue {
                 continue
             }
 
+            // Already handed to the system daemon, possibly by a previous
+            // launch. Starting it again would upload the same recording twice.
+            if BackgroundUploader.shared.isUploading(capture.id) { continue }
+
             do {
                 // The metadata call is idempotent on client_id, so a retry
-                // after a failed upload reuses the same ramble.
+                // after a failed upload reuses the same ramble. Small enough
+                // to go on the ordinary session.
                 let rambleId: String
                 if let existing = capture.rambleId {
                     rambleId = existing
@@ -109,33 +122,20 @@ final class CaptureQueue {
                     update(capture.id) { $0.rambleId = rambleId }
                 }
 
-                // The audio goes up first, always. It is the source of
-                // truth, and nothing — least of all an optional convenience
-                // like a local transcript — is allowed to delay it. Doing
-                // this the other way round is what left uploads hanging:
-                // on-device transcription can stall indefinitely, and the
-                // recording sat on the phone while it did.
-                try await APIClient.shared.uploadAudio(rambleId: rambleId, fileURL: capture.fileURL)
-
-                remove(capture.id)
-                NotificationCenter.default.post(name: .rambleUploaded, object: rambleId)
-
-                // Now that the server has the audio and is already processing
-                // it, a local transcript is a bonus rather than a dependency.
-                await transcribeOnDevice(capture: capture, rambleId: rambleId)
-
-                // Only now is the local copy redundant.
-                try? FileManager.default.removeItem(at: capture.fileURL)
-
-                // Newly extracted items need vectors before semantic search
-                // can find them.
-                EmbeddingSync.shared.sync()
-
-                // The on-device transcript is already good enough to use, so
-                // the upgrade runs afterwards and quietly replaces it.
-                if TranscriptionQuality.preferred == .accurate {
-                    try? await APIClient.shared.upgradeTranscript(rambleId: rambleId)
+                guard let token = await APIClient.shared.currentToken else {
+                    update(capture.id) { $0.lastError = "Sign in to sync" }
+                    return
                 }
+
+                // Hand the audio to the system and move on. It finishes whether
+                // or not this app is still running, which is the entire point;
+                // the result arrives on the uploader's delegate.
+                try BackgroundUploader.shared.upload(
+                    capture: capture,
+                    rambleId: rambleId,
+                    token: token
+                )
+                update(capture.id) { $0.lastError = nil }
             } catch APIError.offline {
                 isOnline = false
                 update(capture.id) { $0.lastError = "Waiting for a connection" }
@@ -151,6 +151,45 @@ final class CaptureQueue {
                     $0.lastError = error.localizedDescription
                 }
             }
+        }
+    }
+
+    // MARK: - Upload outcomes
+
+    /// The system finished a transfer. Everything that used to follow the
+    /// upload inline now happens here, because the upload no longer completes
+    /// inside the loop that started it.
+    func uploadSucceeded(_ captureId: String) async {
+        guard let capture = pending.first(where: { $0.id == captureId }),
+              let rambleId = capture.rambleId
+        else { return }
+
+        remove(captureId)
+        NotificationCenter.default.post(name: .rambleUploaded, object: rambleId)
+
+        // The server has the audio and is already processing it, so a local
+        // transcript is a bonus rather than a dependency.
+        await transcribeOnDevice(capture: capture, rambleId: rambleId)
+
+        // Only now is the local copy redundant.
+        try? FileManager.default.removeItem(at: capture.fileURL)
+
+        // Newly extracted items need vectors before semantic search can find them.
+        EmbeddingSync.shared.sync()
+
+        // The on-device transcript is already good enough to use, so the
+        // upgrade runs afterwards and quietly replaces it.
+        if TranscriptionQuality.preferred == .accurate {
+            try? await APIClient.shared.upgradeTranscript(rambleId: rambleId)
+        }
+    }
+
+    /// A transfer failed. The recording stays queued — it is still on the
+    /// phone, and nothing about a failed upload endangers it.
+    func uploadFailed(_ captureId: String, reason: String) {
+        update(captureId) {
+            $0.attempts += 1
+            $0.lastError = reason
         }
     }
 

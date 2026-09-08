@@ -71,6 +71,26 @@ actor APIClient {
 
     var isSignedIn: Bool { token != nil }
 
+    /// The bearer token, for the background uploader — which builds its own
+    /// requests because a background session cannot be handed one of ours.
+    var currentToken: String? { token }
+
+    /// Where an audio upload goes. Exposed so the background session can build
+    /// the request itself; every other caller goes through this actor.
+    nonisolated static func audioUploadURL(rambleId: String) throws -> URL {
+        guard let url = URL(string: "\(base)/v1/rambles/\(rambleId)/audio") else {
+            throw APIError.server("Could not build the upload URL.")
+        }
+        return url
+    }
+
+    /// The configured base, without the actor hop — the uploader needs it from
+    /// a nonisolated context.
+    nonisolated static var base: String {
+        if let override = ProcessInfo.processInfo.environment["RAMBLE_API_URL"] { return override }
+        return deployedURL
+    }
+
     // MARK: - Requests
 
     private func request(
