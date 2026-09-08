@@ -515,6 +515,18 @@ actor APIClient {
         try await send(request("GET", "/v1/legal", authenticated: false), as: LegalLinks.self)
     }
 
+    // MARK: - Diagnostics
+
+    /// Posts crashes MetricKit collected. Fire-and-forget from the caller's
+    /// point of view; the queue keeps anything that fails to send.
+    func reportCrashes(_ reports: [CrashReporter.Report]) async throws {
+        struct Body: Encodable { let reports: [CrashReporter.Report] }
+        let (data, response) = try await perform(
+            request("POST", "/v1/diagnostics/crashes", body: Body(reports: reports))
+        )
+        try check(response, data: data)
+    }
+
     // MARK: - Your data
 
     /// Everything the server holds about this account, as JSON. The privacy

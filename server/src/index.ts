@@ -8,6 +8,7 @@ import { capabilityReport, config } from './lib/config.ts';
 import { HttpError } from './lib/auth.ts';
 import { RateLimitedError } from './lib/rateLimit.ts';
 import { log } from './lib/logger.ts';
+import { captureError, initErrorReporting } from './lib/errors.ts';
 import { ensureBucket } from './lib/storage.ts';
 import { deliverPendingWebhooks } from './integrations/webhooks.ts';
 import { queueDepth, recoverStuck } from './pipeline/queue.ts';
@@ -16,11 +17,15 @@ import { authRoutes } from './routes/auth.ts';
 import { embeddingRoutes } from './routes/embeddings.ts';
 import { entityRoutes } from './routes/entities.ts';
 import { integrationRoutes } from './routes/integrations.ts';
+import { diagnosticRoutes } from './routes/diagnostics.ts';
 import { legalRoutes } from './routes/legal.ts';
 import { rambleRoutes } from './routes/rambles.ts';
 import { searchRoutes } from './routes/search.ts';
 
 export async function buildServer() {
+  // Before anything can throw.
+  initErrorReporting();
+
   const app = Fastify({
     logger: false,
     bodyLimit: 25 * 1024 * 1024,
@@ -60,6 +65,11 @@ export async function buildServer() {
       url: request.url,
       error: error instanceof Error ? error.message : String(error),
     });
+    captureError(error, {
+      // The route, not the URL: an id in the path would group every occurrence
+      // as its own separate issue.
+      where: `route.${request.method} ${request.routeOptions?.url ?? request.url}`,
+    });
     // Never leak internals to the client.
     return reply.code(500).send({ error: 'Something went wrong on our end.' });
   });
@@ -81,6 +91,7 @@ export async function buildServer() {
   await app.register(integrationRoutes);
   await app.register(embeddingRoutes);
   await app.register(legalRoutes);
+  await app.register(diagnosticRoutes);
 
   return app;
 }

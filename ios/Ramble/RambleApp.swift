@@ -12,6 +12,7 @@ struct RambleApp: App {
                 .tint(Theme.Palette.action)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { DeepLink.shared.handle($0) }
+                .task { CrashReporter.shared.start() }
                 .onReceive(NotificationCenter.default.publisher(for: .appearanceChanged)) { _ in
                     appearance = AppearanceSetting.current
                 }

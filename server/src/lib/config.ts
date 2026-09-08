@@ -124,6 +124,16 @@ export const config = {
     openaiKey: optional('OPENAI_API_KEY'),
   },
 
+  sentry: {
+    // Absent is the normal case: everything in lib/errors.ts is a no-op
+    // without it, so the server runs identically with no DSN configured.
+    dsn: optional('SENTRY_DSN'),
+    environment: optional('SENTRY_ENVIRONMENT', process.env.RAILWAY_ENVIRONMENT ?? 'development'),
+    release: optional('SENTRY_RELEASE', '0.1.0'),
+    /** Consecutive pipeline failures before this is an incident, not a blip. */
+    alertAfterFailures: int('PIPELINE_ALERT_AFTER', 5),
+  },
+
   embedding: {
     // 'device' means the client embeds; the server never calls an embedding
     // API and simply stores what the device computes.

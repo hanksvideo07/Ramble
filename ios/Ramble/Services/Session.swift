@@ -101,6 +101,9 @@ final class Session {
     }
 
     private func afterSignIn() async {
+        // Anything MetricKit collected while signed out can now be attributed.
+        await CrashReporter.shared.flush()
+
         // Anything recorded while signed out or offline can now be sent.
         CaptureQueue.shared.sync()
         await DeviceActionRunner.shared.runPendingActions()

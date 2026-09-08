@@ -1,5 +1,6 @@
 import { pool } from '../db/pool.ts';
 import { log } from '../lib/logger.ts';
+import { captureError, pipelineFailures } from '../lib/errors.ts';
 import { processRamble, type ProcessOptions } from './process.ts';
 
 /**
@@ -48,6 +49,7 @@ async function run(job: Job): Promise<void> {
   inFlight.add(job.rambleId);
   try {
     await processRamble(job.rambleId, job.options);
+    pipelineFailures.succeeded();
   } catch (error) {
     if (job.attempt < MAX_ATTEMPTS) {
       const delay = RETRY_DELAY_MS(job.attempt);
@@ -66,6 +68,13 @@ async function run(job: Job): Promise<void> {
         attempts: job.attempt,
         error: error instanceof Error ? error.message : String(error),
       });
+      captureError(error, {
+        where: 'pipeline.exhausted',
+        extra: { ramble_id: job.rambleId, attempts: job.attempt },
+      });
+      // One recording giving up is ordinary. A run of them is an outage, and
+      // is the thing nobody would spot from logs alone.
+      pipelineFailures.failed(error);
     }
   } finally {
     running -= 1;
