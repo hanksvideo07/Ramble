@@ -4,7 +4,14 @@ import { pool, withTransaction } from '../db/pool.ts';
 import { HttpError, requireUser } from '../lib/auth.ts';
 import { track } from '../lib/analytics.ts';
 import { log } from '../lib/logger.ts';
-import { audioKey, getAudio, putAudio, signedPlaybackUrl, verifyKeySignature } from '../lib/storage.ts';
+import {
+  audioKey,
+  getAudio,
+  putAudio,
+  removeStoredAudio,
+  signedPlaybackUrl,
+  verifyKeySignature,
+} from '../lib/storage.ts';
 import { emitWebhook } from '../integrations/webhooks.ts';
 import { isCloudTranscriptionAvailable } from '../providers/transcription.ts';
 import { enqueue } from '../pipeline/queue.ts';
@@ -390,11 +397,24 @@ export async function rambleRoutes(app: FastifyInstance): Promise<void> {
   app.delete('/v1/rambles/:id', async (request, reply) => {
     const user = await requireUser(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+
+    // The storage keys have to be read before the rows go, because the cascade
+    // is the only thing that knows where the audio lives. Deleting the row
+    // first is how a recording ends up on disk with nothing pointing at it.
+    const { rows: assets } = await pool.query<{ storage_key: string }>(
+      `SELECT a.storage_key FROM audio_assets a
+         JOIN rambles r ON r.id = a.ramble_id
+        WHERE a.ramble_id = $1 AND r.user_id = $2`,
+      [id, user.id],
+    );
+
     const { rowCount } = await pool.query(`DELETE FROM rambles WHERE id = $1 AND user_id = $2`, [
       id,
       user.id,
     ]);
     if (rowCount === 0) throw new HttpError(404, 'Ramble not found.');
+
+    await removeStoredAudio(assets.map((a) => a.storage_key));
     return reply.code(204).send();
   });
 

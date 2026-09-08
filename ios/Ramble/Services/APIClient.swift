@@ -470,6 +470,48 @@ actor APIClient {
         try check(response, data: data)
     }
 
+    // MARK: - Legal
+
+    struct LegalLinks: Decodable {
+        let privacyURL: String
+        let termsURL: String
+        let lastUpdated: String
+        /// False while the policy still carries publisher placeholders, so the
+        /// app can say so rather than presenting an unfinished document as final.
+        let complete: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case privacyURL = "privacy_url"
+            case termsURL = "terms_url"
+            case lastUpdated = "last_updated"
+            case complete
+        }
+    }
+
+    func legal() async throws -> LegalLinks {
+        try await send(request("GET", "/v1/legal", authenticated: false), as: LegalLinks.self)
+    }
+
+    // MARK: - Your data
+
+    /// Everything the server holds about this account, as JSON. The privacy
+    /// policy promises this is reachable from inside the app, so it is.
+    func exportEverything() async throws -> Data {
+        let (data, response) = try await perform(request("GET", "/v1/me/export"))
+        try check(response, data: data)
+        return data
+    }
+
+    /// Irreversible. Removes every recording, every audio file, and the account.
+    func deleteAccount() async throws {
+        struct Body: Encodable { let confirm: String }
+        let (data, response) = try await perform(
+            request("DELETE", "/v1/me", body: Body(confirm: "DELETE"))
+        )
+        try check(response, data: data)
+        setToken(nil)
+    }
+
     // MARK: - Integrations
 
     struct IntegrationList: Decodable {

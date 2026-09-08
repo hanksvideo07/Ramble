@@ -13,6 +13,11 @@ struct SettingsView: View {
     @State private var transcriptionQuality = TranscriptionQuality.preferred
     @State private var appearance = AppearanceSetting.current
     @State private var queue = CaptureQueue.shared
+    @State private var legal: APIClient.LegalLinks?
+    @State private var exportedFile: ExportedData?
+    @State private var isExporting = false
+    @State private var confirmDelete = false
+    @State private var deleteError: String?
 
     var body: some View {
         ScrollView {
@@ -25,6 +30,7 @@ struct SettingsView: View {
                 recording
                 appearanceSection
                 privacy
+                yourData
                 signOut
             }
             .screenPadding()
@@ -33,7 +39,13 @@ struct SettingsView: View {
         .scrollIndicators(.hidden)
         .background(Theme.Palette.paper)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadIntegrations() }
+        .task {
+            await loadIntegrations()
+            legal = try? await APIClient.shared.legal()
+        }
+        .sheet(item: $exportedFile) { file in
+            ShareSheet(url: file.url)
+        }
         .onChange(of: transcriptionQuality) { _, quality in
             TranscriptionQuality.preferred = quality
         }
@@ -51,6 +63,25 @@ struct SettingsView: View {
             }
         } message: {
             Text("Recordings that haven't uploaded yet stay on this device and will send when you sign back in.")
+        }
+        .confirmationDialog(
+            "Delete your account?",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete everything", role: .destructive) {
+                Task {
+                    do {
+                        try await APIClient.shared.deleteAccount()
+                        await session.signOut()
+                        dismiss()
+                    } catch {
+                        deleteError = error.localizedDescription
+                    }
+                }
+            }
+        } message: {
+            Text("Every recording, every audio file, and everything found in them goes with it. This is immediate and cannot be undone.")
         }
     }
 
@@ -259,6 +290,117 @@ struct SettingsView: View {
         }
     }
 
+    /// The promises the privacy policy makes, made real. A policy that says
+    /// your data is exportable and deletable from inside the app is only true
+    /// if these are here.
+    private var yourData: some View {
+        settingsSection("Your data") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
+                if let deleteError {
+                    StatusNotice(
+                        message: "Couldn't delete the account",
+                        detail: deleteError,
+                        tone: .warning,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                }
+
+                dataRow(
+                    title: "Export everything",
+                    detail: "Every recording, transcript, and extracted item, as JSON.",
+                    action: isExporting ? nil : "Export"
+                ) {
+                    Task { await export() }
+                }
+
+                if let legal {
+                    if !legal.complete {
+                        StatusNotice(
+                            message: "These documents aren't finished",
+                            detail: "The publisher name, contact address, and governing law are still placeholders. Fill them in before submitting to the App Store.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                    }
+                    linkRow("Privacy policy", legal.privacyURL)
+                    linkRow("Terms of service", legal.termsURL)
+                }
+
+                dataRow(
+                    title: "Delete your account",
+                    detail: "Removes everything, immediately and permanently.",
+                    action: "Delete",
+                    destructive: true
+                ) {
+                    confirmDelete = true
+                }
+            }
+        }
+    }
+
+    private func dataRow(
+        title: String,
+        detail: String,
+        action: String?,
+        destructive: Bool = false,
+        perform: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .rambleType(Theme.Text.body)
+                    .foregroundStyle(Theme.Palette.ink)
+                Text(detail)
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Theme.Metrics.md)
+            if let action {
+                Button(action, action: perform)
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(destructive ? Theme.Palette.warning : Theme.Palette.action)
+                    .buttonStyle(.plain)
+                    .frame(minHeight: Theme.Metrics.minimumTouchTarget)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+    }
+
+    private func linkRow(_ title: String, _ urlString: String) -> some View {
+        Group {
+            if let url = URL(string: urlString) {
+                Link(destination: url) {
+                    HStack {
+                        Text(title)
+                            .rambleType(Theme.Text.body)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.secondary)
+                    }
+                    .frame(minHeight: Theme.Metrics.minimumTouchTarget)
+                    .contentShape(Rectangle())
+                }
+            }
+        }
+    }
+
+    private func export() async {
+        isExporting = true
+        defer { isExporting = false }
+        do {
+            let data = try await APIClient.shared.exportEverything()
+            let url = FileManager.default.temporaryDirectory
+                .appending(path: "ramble-export-\(Int(Date().timeIntervalSince1970)).json")
+            try data.write(to: url)
+            exportedFile = ExportedData(url: url)
+        } catch {
+            deleteError = error.localizedDescription
+        }
+    }
+
     private var signOut: some View {
         Button("Sign out") { confirmSignOut = true }
             .buttonStyle(SecondaryButtonStyle())
@@ -418,3 +560,25 @@ enum AppearanceSetting: String, CaseIterable, Identifiable {
 extension Notification.Name {
     static let appearanceChanged = Notification.Name("app.ramble.appearanceChanged")
 }
+
+
+/// The exported archive, on its way to wherever the person wants to keep it.
+struct ExportedData: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
+
+/// The system share sheet, which is how a file leaves the app.
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+#if canImport(UIKit)
+import UIKit
+#endif

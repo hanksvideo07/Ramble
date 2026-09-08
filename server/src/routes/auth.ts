@@ -4,6 +4,8 @@ import { pool } from '../db/pool.ts';
 import { createSession, hashPassword, requireUser, revokeSession, verifyPassword } from '../lib/auth.ts';
 import { HttpError } from '../lib/auth.ts';
 import { track } from '../lib/analytics.ts';
+import { log } from '../lib/logger.ts';
+import { removeStoredAudio } from '../lib/storage.ts';
 import {
   enforce,
   loginByAccount,
@@ -169,7 +171,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const user = await requireUser(request);
     const body = z.object({ confirm: z.literal('DELETE') }).parse(request.body);
     if (body.confirm !== 'DELETE') throw new HttpError(400, 'Confirmation required.');
+
+    // Read the storage keys before the cascade removes the only rows that
+    // know where the audio is. Deleting the user first left every recording
+    // they ever made sitting on disk with nothing pointing at it, which made
+    // "delete my account" untrue in the way that matters most.
+    const { rows: assets } = await pool.query<{ storage_key: string }>(
+      `SELECT storage_key FROM audio_assets WHERE user_id = $1`,
+      [user.id],
+    );
+
     await pool.query(`DELETE FROM users WHERE id = $1`, [user.id]);
+    await removeStoredAudio(assets.map((a) => a.storage_key));
+
+    log.info('account.deleted', { audio_objects_removed: assets.length });
     return reply.code(204).send();
   });
 }

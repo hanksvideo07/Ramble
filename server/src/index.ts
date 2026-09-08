@@ -16,6 +16,7 @@ import { authRoutes } from './routes/auth.ts';
 import { embeddingRoutes } from './routes/embeddings.ts';
 import { entityRoutes } from './routes/entities.ts';
 import { integrationRoutes } from './routes/integrations.ts';
+import { legalRoutes } from './routes/legal.ts';
 import { rambleRoutes } from './routes/rambles.ts';
 import { searchRoutes } from './routes/search.ts';
 
@@ -79,6 +80,7 @@ export async function buildServer() {
   await app.register(actionRoutes);
   await app.register(integrationRoutes);
   await app.register(embeddingRoutes);
+  await app.register(legalRoutes);
 
   return app;
 }

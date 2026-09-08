@@ -1,8 +1,9 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve } from 'node:path';
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -26,6 +27,18 @@ export interface StorageAdapter {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
   signedUrl(key: string): Promise<string>;
+  /**
+   * Removes an object for good.
+   *
+   * Deleting a recording used to drop only its database row, leaving the audio
+   * itself on disk indefinitely — so "delete my account" did not delete the
+   * recordings, which is both a broken promise and the thing the privacy
+   * policy has to be able to say truthfully.
+   *
+   * Missing objects are not an error: a delete that runs twice, or after a
+   * failed upload, has already achieved what it was asked to do.
+   */
+  remove(key: string): Promise<void>;
 }
 
 // --- S3 --------------------------------------------------------------------
@@ -68,6 +81,10 @@ class S3Storage implements StorageAdapter {
     const bytes = await response.Body?.transformToByteArray();
     if (!bytes) throw new Error(`No audio body at key ${key}.`);
     return Buffer.from(bytes);
+  }
+
+  async remove(key: string): Promise<void> {
+    await this.client.send(new DeleteObjectCommand({ Bucket: config.s3.bucket, Key: key }));
   }
 
   async signedUrl(key: string): Promise<string> {
@@ -114,6 +131,11 @@ class FilesystemStorage implements StorageAdapter {
 
   async get(key: string): Promise<Buffer> {
     return readFile(this.pathFor(key));
+  }
+
+  async remove(key: string): Promise<void> {
+    // force: true so an already-absent file is a success, not a throw.
+    await rm(this.pathFor(key), { force: true });
   }
 
   async signedUrl(key: string): Promise<string> {
@@ -167,4 +189,27 @@ export async function getAudio(key: string): Promise<Buffer> {
 
 export async function signedPlaybackUrl(key: string): Promise<string> {
   return storage.signedUrl(key);
+}
+
+/**
+ * Deletes the stored audio for a set of storage keys.
+ *
+ * Best-effort per key: one object failing to delete must not abandon the rest,
+ * because the caller has usually already removed the rows that point at them
+ * and a thrown error here would leave the remainder orphaned with nothing left
+ * to find them by. Failures are logged loudly instead — an object that outlives
+ * its owner is a privacy problem, not a routine warning.
+ */
+export async function removeStoredAudio(keys: string[]): Promise<void> {
+  const store = storage;
+  for (const key of keys) {
+    try {
+      await store.remove(key);
+    } catch (error) {
+      log.error('storage.orphaned_object', {
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
