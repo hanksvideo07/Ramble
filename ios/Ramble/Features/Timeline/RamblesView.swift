@@ -162,12 +162,28 @@ struct RamblesView: View {
                 action: { Task { await model.refresh() } }
             )
         } else if model.isEmpty {
-            EmptyState(
-                title: "Nothing here yet.",
-                message: "Press the green button and start talking. Don't sort it, don't title it \u{2014} that's the whole idea.",
-                systemImage: "waveform"
-            )
+            // Showing rather than telling. An empty state that states a fact
+            // and stops teaches nothing; this is the whole product in one
+            // block, and it is honestly labelled as an example.
+            VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
+                Text("Nothing here yet.")
+                    .rambleType(Theme.Text.recordingTitle)
+                    .foregroundStyle(Theme.Palette.ink)
+                Text("Press the green button and talk. Don't sort it, don't title it \u{2014} that's the whole idea. Here's what one recording turns into:")
+                    .rambleType(Theme.Text.supporting)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                WelcomeExtraction()
+                Text("An example, not one of yours.")
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary)
+            }
+            .padding(.top, Theme.Metrics.lg)
         } else {
+            if let summary = model.summary, summary.isWorthShowing {
+                MemoryStrip(summary: summary)
+            }
+
             ForEach(model.days) { day in
                 DayHeading(label: day.label, count: day.entries.count)
                 ForEach(day.entries) { entry in

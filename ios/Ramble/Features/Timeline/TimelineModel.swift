@@ -42,6 +42,8 @@ final class TimelineModel {
     /// Ids seen for the first time in the latest load, so only genuinely new
     /// rows animate in.
     private(set) var arriving: Set<String> = []
+    /// What has accumulated. Nil until it loads; absent is not an error.
+    private(set) var summary: MemorySummary?
 
     private var cards: [RambleCard] = []
     private var knownIds: Set<String> = []
@@ -85,11 +87,18 @@ final class TimelineModel {
         isLoading = true
         defer { isLoading = false }
         await fetch()
+        await loadSummary()
     }
 
     func refresh() async {
         await fetch()
         await InboxModel.shared.refresh()
+        await loadSummary()
+    }
+
+    /// Best-effort: the history is worth showing whether or not this arrives.
+    func loadSummary() async {
+        summary = try? await APIClient.shared.summary()
     }
 
     func loadMore() async {

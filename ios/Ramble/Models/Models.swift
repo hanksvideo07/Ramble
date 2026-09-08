@@ -62,7 +62,7 @@ enum ItemKind: String, Codable, CaseIterable, Hashable {
 
 // MARK: - Processing state
 
-enum ProcessingState: String, Codable {
+enum ProcessingState: String, Codable, Equatable {
     case awaitingUpload = "awaiting_upload"
     case uploaded, transcribing, transcribed, understanding, embedding, processed, failed
 
@@ -632,6 +632,63 @@ struct Inbox: Codable {
             .map { (kind: $0.key, items: $0.value) }
             .sorted { ($0.kind.sortRank, $0.kind.label) < ($1.kind.sortRank, $1.kind.label) }
     }
+}
+
+// MARK: - Accumulation
+
+/// What has built up. The one thing the app never conveyed: that anything is
+/// accumulating at all.
+struct MemorySummary: Codable {
+    let rambles: Int
+    let totalSeconds: Int
+    let firstRecordedAt: Date?
+    let itemsByKind: [String: Int]
+    let recurring: [Recurring]
+    let streakDays: Int
+
+    enum CodingKeys: String, CodingKey {
+        case rambles, recurring
+        case totalSeconds = "total_seconds"
+        case firstRecordedAt = "first_recorded_at"
+        case itemsByKind = "items_by_kind"
+        case streakDays = "streak_days"
+    }
+
+    struct Recurring: Codable, Identifiable, Hashable {
+        let id: String
+        let name: String
+        let kind: String
+        let mentions: Int
+    }
+
+    /// Hours, or minutes when there are not yet hours. Saying "0 hours" to
+    /// someone on their second recording is a way of telling them they have
+    /// done nothing.
+    var spokenLabel: String {
+        if totalSeconds >= 3600 {
+            let hours = Double(totalSeconds) / 3600
+            return hours >= 10
+                ? "\(Int(hours.rounded())) hours"
+                : String(format: "%.1f hours", hours)
+        }
+        return "\(max(1, totalSeconds / 60)) minutes"
+    }
+
+    /// The kinds worth naming, largest first, ignoring the filler.
+    var notableKinds: [(kind: ItemKind, count: Int)] {
+        itemsByKind
+            .compactMap { key, value -> (ItemKind, Int)? in
+                guard let kind = ItemKind(rawValue: key),
+                      kind != .summary, kind != .note, value > 0
+                else { return nil }
+                return (kind, value)
+            }
+            .sorted { $0.1 > $1.1 }
+            .prefix(3)
+            .map { (kind: $0.0, count: $0.1) }
+    }
+
+    var isWorthShowing: Bool { rambles >= 2 }
 }
 
 // MARK: - Account

@@ -99,6 +99,70 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
     return { question: body.question, ...result };
   });
 
+  /**
+   * A sense of what has accumulated.
+   *
+   * Nothing in the app conveyed that anything was building up — no idea how
+   * much had been captured, who keeps coming up, or what the person keeps
+   * returning to. That is the emotional core of a memory product and it was
+   * entirely absent, so this is the data behind putting it back.
+   *
+   * Counts only. No content leaves here that the timeline would not show.
+   */
+  app.get('/v1/summary', async (request) => {
+    const user = await requireUser(request);
+    const [totals, kinds, people, streak] = await Promise.all([
+      pool.query<{ rambles: string; seconds: string; first_at: Date | null }>(
+        `SELECT COUNT(*)::text AS rambles,
+                COALESCE(SUM(duration_seconds), 0)::text AS seconds,
+                MIN(recorded_at) AS first_at
+           FROM rambles WHERE user_id = $1`,
+        [user.id],
+      ),
+      pool.query<{ kind: string; n: string }>(
+        `SELECT kind, COUNT(*)::text AS n
+           FROM extracted_items
+          WHERE user_id = $1 AND kind <> 'summary'
+          GROUP BY kind ORDER BY COUNT(*) DESC`,
+        [user.id],
+      ),
+      // Who keeps coming up. Ordered by how often, not how recently — the
+      // point is recurrence, which is what a person cannot see for themselves.
+      pool.query<{ id: string; name: string; kind: string; mentions: number }>(
+        `SELECT id, name, kind, mention_count AS mentions
+           FROM entities
+          WHERE user_id = $1 AND merged_into_id IS NULL AND mention_count > 1
+          ORDER BY mention_count DESC, last_seen_at DESC
+          LIMIT 6`,
+        [user.id],
+      ),
+      // Consecutive days ending today or yesterday. Counting from yesterday
+      // too, so a streak is not broken merely because it is early morning.
+      pool.query<{ days: string }>(
+        `WITH days AS (
+           SELECT DISTINCT date_trunc('day', recorded_at)::date AS d
+             FROM rambles WHERE user_id = $1
+         ), ranked AS (
+           SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
+         )
+         SELECT COUNT(*)::text AS days FROM ranked
+          WHERE grp = (SELECT grp FROM ranked ORDER BY d DESC LIMIT 1)
+            AND (SELECT MAX(d) FROM days) >= CURRENT_DATE - 1`,
+        [user.id],
+      ),
+    ]);
+
+    const row = totals.rows[0]!;
+    return {
+      rambles: Number(row.rambles),
+      total_seconds: Math.round(Number(row.seconds)),
+      first_recorded_at: row.first_at,
+      items_by_kind: Object.fromEntries(kinds.rows.map((r) => [r.kind, Number(r.n)])),
+      recurring: people.rows,
+      streak_days: Number(streak.rows[0]?.days ?? 0),
+    };
+  });
+
   /** Everything still open: the "needs you" set across all rambles. */
   app.get('/v1/inbox', async (request) => {
     const user = await requireUser(request);

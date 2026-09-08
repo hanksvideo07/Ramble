@@ -7,12 +7,71 @@ import SwiftUI
 struct RecordingRow: View {
     let ramble: RambleCard
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// How much this recording turned out to hold.
+    ///
+    /// Every row used to be identical whether it carried one stray note or a
+    /// twelve-minute conversation with five decisions in it, which made a
+    /// history of real thinking read as a uniform list of receipts. Weight is
+    /// what gives the page rhythm: a substantial recording is set larger, keeps
+    /// more of its summary, and shows its labels; a passing thought stays
+    /// small. The information was always there — it just wasn't visible.
+    private enum Weight {
+        case passing, ordinary, substantial
+
+        var titleStyle: Theme.TypeStyle {
+            switch self {
+            case .passing: Theme.Text.sectionSerif
+            case .ordinary: Theme.Text.recordingTitle
+            case .substantial: Theme.Text.pageTitle
+            }
+        }
+
+        var summaryLines: Int {
+            switch self {
+            case .passing: 1
+            case .ordinary: 2
+            case .substantial: 4
+            }
+        }
+
+        var spacing: CGFloat {
+            switch self {
+            case .passing: Theme.Metrics.xs
+            case .ordinary: Theme.Metrics.sm
+            case .substantial: Theme.Metrics.md
+            }
+        }
+
+        var bottomPadding: CGFloat {
+            switch self {
+            case .passing: Theme.Metrics.lg
+            case .ordinary: Theme.Metrics.xl
+            case .substantial: Theme.Metrics.xxl
+            }
+        }
+    }
+
+    private var weight: Weight {
+        // Extracted things count for more than duration: a thirty-second
+        // recording that produced a decision and two tasks matters more than
+        // two minutes of thinking aloud that produced one note.
+        let extracted = ramble.itemCounts
+            .filter { $0.key != ItemKind.summary.rawValue && $0.key != ItemKind.note.rawValue }
+            .values.reduce(0, +)
+        let score = extracted * 2 + Int(ramble.durationSeconds / 45)
+        if score >= 6 { return .substantial }
+        if score >= 2 { return .ordinary }
+        return .passing
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
+        VStack(alignment: .leading, spacing: weight.spacing) {
             meta
 
             Text(ramble.displayTitle)
-                .rambleType(Theme.Text.recordingTitle)
+                .rambleType(weight.titleStyle)
                 .foregroundStyle(Theme.Palette.ink)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -22,11 +81,14 @@ struct RecordingRow: View {
                     Text(summary)
                         .rambleType(Theme.Text.supporting)
                         .foregroundStyle(Theme.Palette.secondary)
-                        .lineLimit(3)
+                        .lineLimit(weight.summaryLines)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                labels
+                // A passing thought does not need its own label; the title is
+                // already the whole of it.
+                if weight != .passing { labels }
+
             } else {
                 ProcessingLine(state: ramble.processingState)
             }
@@ -36,8 +98,16 @@ struct RecordingRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, Theme.Metrics.xl)
+        .padding(.bottom, weight.bottomPadding)
         .contentShape(Rectangle())
+        // The moment understanding lands. A row watched through processing
+        // used to snap from a spinner to a finished entry between two polls;
+        // now the summary and the labels arrive. It is the only place in the
+        // app where the person can actually see the thing work.
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82),
+            value: ramble.processingState
+        )
         .accessibilityElement(children: .combine)
     }
 
@@ -67,6 +137,11 @@ struct RecordingRow: View {
                 }
             }
             .padding(.top, Theme.Metrics.xs)
+            .transition(
+                reduceMotion
+                    ? .identity
+                    : .opacity.combined(with: .offset(y: 6))
+            )
         }
     }
 }

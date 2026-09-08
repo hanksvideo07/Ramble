@@ -462,6 +462,11 @@ actor APIClient {
         )
     }
 
+    /// What has accumulated. Counts and recurring names, no content.
+    func summary() async throws -> MemorySummary {
+        try await send(request("GET", "/v1/summary"), as: MemorySummary.self)
+    }
+
     func inbox() async throws -> Inbox {
         try await send(request("GET", "/v1/inbox"), as: Inbox.self)
     }
