@@ -11,6 +11,7 @@ enum AppDestination: Hashable {
     case inbox
     case activity
     case agents
+    case uploads
     case settings
 }
 
@@ -28,6 +29,7 @@ extension View {
             case .inbox: InboxView()
             case .activity: ActivityView()
             case .agents: AgentsView()
+            case .uploads: UploadsView()
             case .settings: SettingsView()
             }
         }

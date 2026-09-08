@@ -7,6 +7,7 @@ struct RambleWidgetBundle: WidgetBundle {
         TalkWidget()
         CaptureWidget()
         RecordingLiveActivity()
+        RambleControl()
     }
 }
 

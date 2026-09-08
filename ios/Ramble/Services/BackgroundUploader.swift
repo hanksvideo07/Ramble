@@ -31,11 +31,38 @@ final class BackgroundUploader: NSObject {
 
     private(set) var inFlight: Set<String> = []
 
+    /// What each transfer has actually done, and when it last did it.
+    ///
+    /// This exists because "is it uploading in the background?" is otherwise
+    /// unanswerable from the outside. A transfer that the system is genuinely
+    /// carrying and one that is simply stalled look identical — both show
+    /// "Sending…". The only honest way to tell them apart is a timestamp on
+    /// the last byte that moved, compared against when the app was last on
+    /// screen. Persisted, because the whole question is about what happened
+    /// while this process was not running.
+    private(set) var progress: [String: Progress] = [:]
+
+    struct Progress: Codable, Hashable {
+        var bytesSent: Int64
+        var totalBytes: Int64
+        var startedAt: Date
+        var lastActivityAt: Date
+        /// Whether the app was in the foreground the last time bytes moved.
+        /// False here is the proof that background transfer works.
+        var lastActivityInForeground: Bool
+
+        var fraction: Double {
+            totalBytes > 0 ? min(1, Double(bytesSent) / Double(totalBytes)) : 0
+        }
+    }
+
     /// Identifier is stable across launches — that is how the system reunites
     /// a relaunched app with transfers it started in a previous life.
     static let sessionIdentifier = "app.ramble.upload"
 
     @ObservationIgnored private let mapURL = Recorder.recordingsDirectory().appending(path: "uploads.json")
+    @ObservationIgnored private let progressURL = Recorder.recordingsDirectory()
+        .appending(path: "upload-progress.json")
     /// URLSession task identifier to capture id. On disk because the process
     /// that started a transfer is often not the one that sees it finish.
     @ObservationIgnored private var taskToCapture: [Int: String] = [:]
@@ -56,6 +83,7 @@ final class BackgroundUploader: NSObject {
     private override init() {
         super.init()
         loadMap()
+        loadProgress()
     }
 
     /// Reconnects to transfers already in flight. Called at launch, before any
@@ -91,11 +119,21 @@ final class BackgroundUploader: NSObject {
             to: capture.id
         )
 
+        let size = ((try? FileManager.default.attributesOfItem(atPath: bodyURL.path))?[.size] as? Int64) ?? 0
+
         let task = session.uploadTask(with: request, fromFile: bodyURL)
         task.taskDescription = capture.id
         taskToCapture[task.taskIdentifier] = capture.id
         saveMap()
         inFlight.insert(capture.id)
+        progress[capture.id] = Progress(
+            bytesSent: 0,
+            totalBytes: size,
+            startedAt: Date(),
+            lastActivityAt: Date(),
+            lastActivityInForeground: true
+        )
+        saveProgress()
         task.resume()
     }
 
@@ -126,10 +164,29 @@ final class BackgroundUploader: NSObject {
         return bodyURL
     }
 
+    /// Records that bytes moved, and whether the app was on screen at the time.
+    fileprivate func note(bytesSent: Int64, total: Int64, for captureId: String) {
+        var entry = progress[captureId] ?? Progress(
+            bytesSent: 0,
+            totalBytes: total,
+            startedAt: Date(),
+            lastActivityAt: Date(),
+            lastActivityInForeground: true
+        )
+        entry.bytesSent = bytesSent
+        if total > 0 { entry.totalBytes = total }
+        entry.lastActivityAt = Date()
+        entry.lastActivityInForeground = UIApplication.shared.applicationState == .active
+        progress[captureId] = entry
+        saveProgress()
+    }
+
     private func cleanUp(captureId: String, taskIdentifier: Int) {
         inFlight.remove(captureId)
         taskToCapture.removeValue(forKey: taskIdentifier)
+        progress.removeValue(forKey: captureId)
         saveMap()
+        saveProgress()
         try? FileManager.default.removeItem(
             at: Recorder.recordingsDirectory().appending(path: "upload-\(captureId).multipart")
         )
@@ -150,11 +207,43 @@ final class BackgroundUploader: NSObject {
             if let key = Int($1.key) { $0[key] = $1.value }
         }
     }
+
+    private func saveProgress() {
+        try? JSONEncoder().encode(progress).write(to: progressURL, options: .atomic)
+    }
+
+    private func loadProgress() {
+        guard let data = try? Data(contentsOf: progressURL),
+              let saved = try? JSONDecoder().decode([String: Progress].self, from: data)
+        else { return }
+        progress = saved
+    }
 }
 
 // MARK: - Delegate
 
 extension BackgroundUploader: URLSessionDataDelegate {
+    /// Bytes moving. The only evidence that a transfer is alive, and — because
+    /// it records whether the app was on screen — the only evidence that it is
+    /// alive while the app is not.
+    nonisolated func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        let captureId = task.taskDescription
+        Task { @MainActor in
+            guard let captureId else { return }
+            BackgroundUploader.shared.note(
+                bytesSent: totalBytesSent,
+                total: totalBytesExpectedToSend,
+                for: captureId
+            )
+        }
+    }
+
     /// The server's reply. Only consulted for its status code; the body is a
     /// small acknowledgement.
     nonisolated func urlSession(
@@ -208,3 +297,8 @@ extension BackgroundUploader: URLSessionDataDelegate {
         }
     }
 }
+
+
+#if canImport(UIKit)
+import UIKit
+#endif

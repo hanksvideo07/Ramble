@@ -29,6 +29,7 @@ struct SettingsView: View {
                 work
                 connections
                 recording
+                waysToStart
                 onDeviceSearch
                 appearanceSection
                 privacy
@@ -205,29 +206,29 @@ struct SettingsView: View {
     private var recording: some View {
         settingsSection("Recording") {
             VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Waiting to upload")
-                            .rambleType(Theme.Text.body)
-                            .foregroundStyle(Theme.Palette.ink)
-                        Text(queue.pending.isEmpty
-                             ? "Everything's uploaded."
-                             : queue.pending.count == 1
-                               ? "1 recording is still on this phone."
-                               : "\(queue.pending.count) recordings are still on this phone.")
-                            .rambleType(Theme.Text.meta)
+NavigationLink(value: AppDestination.uploads) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Waiting to upload")
+                                .rambleType(Theme.Text.body)
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text(queue.pending.isEmpty
+                                 ? "Everything's uploaded."
+                                 : queue.pending.count == 1
+                                   ? "1 recording is still on this phone."
+                                   : "\(queue.pending.count) recordings are still on this phone.")
+                                .rambleType(Theme.Text.meta)
+                                .foregroundStyle(Theme.Palette.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.Palette.secondary)
                     }
-                    Spacer()
-                    if !queue.pending.isEmpty {
-                        Button("Send now") { queue.sync() }
-                            .rambleType(Theme.Text.meta)
-                            .foregroundStyle(Theme.Palette.action)
-                            .buttonStyle(.plain)
-                            .frame(minHeight: Theme.Metrics.minimumTouchTarget)
-                    }
+                    .frame(minHeight: Theme.Metrics.minimumTouchTarget)
+                    .contentShape(Rectangle())
                 }
-                .padding(.vertical, Theme.Metrics.sm)
+                .buttonStyle(.plain)
 
                 if session.health?.hasCloudTranscription == true {
                     VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
@@ -288,6 +289,58 @@ struct SettingsView: View {
                     "Actions that reach other people",
                     "Always require you to say yes first, every single time. Nothing is ever sent on your behalf without that."
                 )
+            }
+        }
+    }
+
+    /// Where the record button can live besides inside the app.
+    ///
+    /// All three already work the moment the app is installed — they are
+    /// system settings, not app settings — which is exactly why they need
+    /// saying. Nobody goes looking in iOS Settings for a button they don't
+    /// know exists.
+    private var waysToStart: some View {
+        settingsSection("Other ways to start") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.lg) {
+                wayRow(
+                    "The Action Button",
+                    "iOS Settings \u{203A} Action Button, swipe to Controls, tap the control and choose Ramble. Then a long press on the side of the phone starts recording.",
+                    systemImage: "button.horizontal.top.press"
+                )
+                wayRow(
+                    "Control Centre",
+                    "Swipe down from the top-right, press and hold, Add a Control, then search for Ramble.",
+                    systemImage: "switch.2"
+                )
+                wayRow(
+                    "Siri and Shortcuts",
+                    "Say \u{201C}Start a Ramble\u{201D}, or use the Start a ramble action in the Shortcuts app.",
+                    systemImage: "waveform"
+                )
+                wayRow(
+                    "Your Home and Lock Screen",
+                    "Long-press the wallpaper to add the Ramble widget. The Lock Screen one records with a single tap, without unlocking.",
+                    systemImage: "square.grid.2x2"
+                )
+            }
+        }
+    }
+
+    private func wayRow(_ title: String, _ detail: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Metrics.md) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(Theme.Palette.action)
+                .frame(width: 22)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .rambleType(Theme.Text.bodyStrong)
+                    .foregroundStyle(Theme.Palette.ink)
+                Text(detail)
+                    .rambleType(Theme.Text.supporting)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
