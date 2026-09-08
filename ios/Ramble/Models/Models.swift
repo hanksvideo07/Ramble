@@ -667,11 +667,14 @@ struct MemorySummary: Codable {
     var spokenLabel: String {
         if totalSeconds >= 3600 {
             let hours = Double(totalSeconds) / 3600
-            return hours >= 10
-                ? "\(Int(hours.rounded())) hours"
-                : String(format: "%.1f hours", hours)
+            if hours >= 10 { return "\(Int(hours.rounded())) hours" }
+            let rounded = (hours * 10).rounded() / 10
+            return rounded == 1
+                ? "1 hour"
+                : String(format: "%.1f hours", rounded)
         }
-        return "\(max(1, totalSeconds / 60)) minutes"
+        let minutes = max(1, totalSeconds / 60)
+        return "\(minutes) minute\(minutes == 1 ? "" : "s")"
     }
 
     /// The kinds worth naming, largest first, ignoring the filler.

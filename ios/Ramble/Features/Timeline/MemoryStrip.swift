@@ -45,7 +45,8 @@ struct MemoryStrip: View {
     /// not.
     private var sentence: String {
         var parts: [String] = []
-        parts.append("\(summary.rambles) recordings, \(summary.spokenLabel) of talking")
+        let count = summary.rambles
+        parts.append("\(count) recording\(count == 1 ? "" : "s"), \(summary.spokenLabel) of talking")
 
         let kinds = summary.notableKinds
         if !kinds.isEmpty {
