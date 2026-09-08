@@ -4,6 +4,12 @@ import { pool } from '../db/pool.ts';
 import { createSession, hashPassword, requireUser, revokeSession, verifyPassword } from '../lib/auth.ts';
 import { HttpError } from '../lib/auth.ts';
 import { track } from '../lib/analytics.ts';
+import {
+  enforce,
+  loginByAccount,
+  loginByIp,
+  registerByIp,
+} from '../lib/rateLimit.ts';
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -14,9 +20,13 @@ const credentialsSchema = z.object({
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post('/v1/auth/register', async (request, reply) => {
+    enforce([{ limiter: registerByIp, key: request.ip }], 'register');
     const body = credentialsSchema.parse(request.body);
     const existing = await pool.query(`SELECT 1 FROM users WHERE email = $1`, [body.email.toLowerCase()]);
     if ((existing.rowCount ?? 0) > 0) {
+      // Counts against the limit: walking a list of addresses to learn which
+      // are taken is the other thing this endpoint can be used for.
+      registerByIp.record(request.ip);
       throw new HttpError(409, 'An account with that email already exists.');
     }
 
@@ -25,6 +35,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       [body.email.toLowerCase(), await hashPassword(body.password), body.display_name ?? null],
     );
     const userId = rows[0]!.id;
+    registerByIp.record(request.ip);
     const session = await createSession(userId, body.device);
     await track(userId, 'account_created', {});
 
@@ -37,6 +48,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/v1/auth/login', async (request) => {
     const body = credentialsSchema.parse(request.body);
+    const account = body.email.toLowerCase();
+    enforce(
+      [
+        { limiter: loginByIp, key: request.ip },
+        { limiter: loginByAccount, key: account },
+      ],
+      'login',
+    );
     const { rows } = await pool.query<{
       id: string;
       email: string;
@@ -45,14 +64,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       onboarded_at: Date | null;
     }>(
       `SELECT id, email, password_hash, profile, onboarded_at FROM users WHERE email = $1`,
-      [body.email.toLowerCase()],
+      [account],
     );
     const user = rows[0];
     // Same error for unknown email and wrong password, so the response does
     // not reveal which addresses have accounts.
     if (!user || !(await verifyPassword(body.password, user.password_hash))) {
+      loginByIp.record(request.ip);
+      loginByAccount.record(account);
       throw new HttpError(401, 'Incorrect email or password.');
     }
+
+    // The credential worked, so the failures before it were a person
+    // misremembering rather than someone guessing.
+    loginByIp.clear(request.ip);
+    loginByAccount.clear(account);
 
     const session = await createSession(user.id, body.device);
     return {

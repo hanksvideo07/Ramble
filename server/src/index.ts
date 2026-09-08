@@ -6,6 +6,7 @@ import { migrate } from './db/migrate.ts';
 import { pool, registerVectorParser } from './db/pool.ts';
 import { capabilityReport, config } from './lib/config.ts';
 import { HttpError } from './lib/auth.ts';
+import { RateLimitedError } from './lib/rateLimit.ts';
 import { log } from './lib/logger.ts';
 import { ensureBucket } from './lib/storage.ts';
 import { deliverPendingWebhooks } from './integrations/webhooks.ts';
@@ -19,7 +20,14 @@ import { rambleRoutes } from './routes/rambles.ts';
 import { searchRoutes } from './routes/search.ts';
 
 export async function buildServer() {
-  const app = Fastify({ logger: false, bodyLimit: 25 * 1024 * 1024 });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 25 * 1024 * 1024,
+    // Railway terminates TLS in front of us, so without this every request
+    // appears to come from the proxy and a per-IP limit would throttle the
+    // whole world together.
+    trustProxy: true,
+  });
 
   await app.register(cors, { origin: true });
   await app.register(multipart, {
@@ -28,6 +36,12 @@ export async function buildServer() {
   });
 
   app.setErrorHandler((error, request, reply) => {
+    if (error instanceof RateLimitedError) {
+      return reply
+        .code(429)
+        .header('Retry-After', String(error.retryAfterSeconds))
+        .send({ error: error.message });
+    }
     if (error instanceof HttpError) {
       return reply.code(error.statusCode).send({ error: error.message });
     }
