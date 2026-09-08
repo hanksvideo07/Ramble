@@ -19,6 +19,7 @@ import { entityRoutes } from './routes/entities.ts';
 import { integrationRoutes } from './routes/integrations.ts';
 import { diagnosticRoutes } from './routes/diagnostics.ts';
 import { legalRoutes } from './routes/legal.ts';
+import { mcpRoutes } from './routes/mcp.ts';
 import { rambleRoutes } from './routes/rambles.ts';
 import { searchRoutes } from './routes/search.ts';
 
@@ -92,6 +93,7 @@ export async function buildServer() {
   await app.register(embeddingRoutes);
   await app.register(legalRoutes);
   await app.register(diagnosticRoutes);
+  await app.register(mcpRoutes);
 
   return app;
 }

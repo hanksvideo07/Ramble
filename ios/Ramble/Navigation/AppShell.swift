@@ -10,6 +10,7 @@ enum AppDestination: Hashable {
     case entity(String)
     case inbox
     case activity
+    case agents
     case settings
 }
 
@@ -26,6 +27,7 @@ extension View {
             case .entity(let id): EntityDetailView(entityId: id)
             case .inbox: InboxView()
             case .activity: ActivityView()
+            case .agents: AgentsView()
             case .settings: SettingsView()
             }
         }

@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var isExporting = false
     @State private var confirmDelete = false
     @State private var deleteError: String?
+    @State private var diagnostics = EmbeddingDiagnostics.shared
 
     var body: some View {
         ScrollView {
@@ -28,6 +29,7 @@ struct SettingsView: View {
                 work
                 connections
                 recording
+                onDeviceSearch
                 appearanceSection
                 privacy
                 yourData
@@ -290,6 +292,61 @@ struct SettingsView: View {
         }
     }
 
+    /// Whether this phone can do semantic search itself.
+    ///
+    /// It was built, wired, and never run on real hardware — a simulator
+    /// cannot answer the question. This is the button that does.
+    private var onDeviceSearch: some View {
+        settingsSection("Search on this device") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.md) {
+                Text("Ramble prefers to work out what your words mean on the phone itself, so nothing has to be sent anywhere. This checks whether that actually works here.")
+                    .rambleType(Theme.Text.supporting)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let summary = diagnostics.summary {
+                    StatusNotice(
+                        message: summary,
+                        tone: {
+                            switch diagnostics.state {
+                            case .failed: .warning
+                            case .downloading, .running: .working
+                            case .passed(let r): r.isUsable ? .neutral : .warning
+                            case .idle: .neutral
+                            }
+                        }(),
+                        systemImage: {
+                            switch diagnostics.state {
+                            case .failed: "exclamationmark.triangle"
+                            case .passed(let r): r.isUsable ? "checkmark.circle" : "exclamationmark.triangle"
+                            default: nil
+                            }
+                        }()
+                    )
+                }
+
+                if case .passed(let result) = diagnostics.state {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(result.dimension) dimensions \u{00B7} revision \(result.revision)")
+                        if !result.isUsable {
+                            Text("Set EMBEDDING_PROVIDER=openrouter on the server to have it embed instead.")
+                        }
+                    }
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                let busy = diagnostics.state == .downloading || diagnostics.state == .running
+                Button(busy ? "Checking\u{2026}" : "Check it") {
+                    Task { await diagnostics.run() }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(busy)
+            }
+        }
+    }
+
     /// The promises the privacy policy makes, made real. A policy that says
     /// your data is exportable and deletable from inside the app is only true
     /// if these are here.
@@ -324,6 +381,27 @@ struct SettingsView: View {
                     linkRow("Privacy policy", legal.privacyURL)
                     linkRow("Terms of service", legal.termsURL)
                 }
+
+                NavigationLink(value: AppDestination.agents) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Let other software in")
+                                .rambleType(Theme.Text.body)
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text("Connect an AI assistant, or send events to your own tools.")
+                                .rambleType(Theme.Text.meta)
+                                .foregroundStyle(Theme.Palette.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.secondary)
+                    }
+                    .frame(minHeight: Theme.Metrics.minimumTouchTarget)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
 
                 dataRow(
                     title: "Delete your account",

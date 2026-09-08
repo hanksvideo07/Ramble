@@ -536,6 +536,55 @@ actor APIClient {
         try check(response, data: data)
     }
 
+    // MARK: - Webhooks and agents
+
+    struct WebhookList: Decodable {
+        struct Webhook: Decodable, Identifiable, Hashable {
+            let id: String
+            let url: String
+            let events: [String]
+            let active: Bool
+        }
+        let webhooks: [Webhook]
+        let availableEvents: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case webhooks
+            case availableEvents = "available_events"
+        }
+    }
+
+    func webhooks() async throws -> WebhookList {
+        try await send(request("GET", "/v1/webhooks"), as: WebhookList.self)
+    }
+
+    struct CreatedWebhook: Decodable {
+        let id: String
+        let url: String
+        /// Shown exactly once, at creation. It cannot be retrieved again.
+        let secret: String
+    }
+
+    func createWebhook(url: String, events: [String]) async throws -> CreatedWebhook {
+        struct Body: Encodable {
+            let url: String
+            let events: [String]
+        }
+        return try await send(
+            request("POST", "/v1/webhooks", body: Body(url: url, events: events)),
+            as: CreatedWebhook.self
+        )
+    }
+
+    func deleteWebhook(id: String) async throws {
+        let (data, response) = try await perform(request("DELETE", "/v1/webhooks/\(id)"))
+        try check(response, data: data)
+    }
+
+    /// Where an agent connects, and the token it uses. Both are already true of
+    /// this account; this just surfaces them.
+    var mcpEndpoint: String { "\(Self.base)/mcp" }
+
     // MARK: - Legal
 
     struct LegalLinks: Decodable {
