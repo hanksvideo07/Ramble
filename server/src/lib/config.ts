@@ -127,6 +127,9 @@ export const config = {
   embedding: {
     // 'device' means the client embeds; the server never calls an embedding
     // API and simply stores what the device computes.
+    // 'device' | 'openrouter' | 'openai' | 'mock'. Switching this changes the
+    // vector space, so EMBEDDING_REVISION must be bumped with it or old
+    // vectors will be searched as if they were comparable.
     provider: optional('EMBEDDING_PROVIDER', 'device'),
     model: optional('EMBEDDING_MODEL', 'apple.nl_contextual'),
     // Must match the width the device produces, or vectors are incomparable.

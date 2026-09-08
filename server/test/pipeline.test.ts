@@ -5,7 +5,11 @@ import { pool, registerVectorParser, toVectorLiteral, withTransaction } from '..
 import { migrate } from '../src/db/migrate.ts';
 import { hashPassword } from '../src/lib/auth.ts';
 import { audioKey, ensureBucket, putAudio } from '../src/lib/storage.ts';
-import { embedding, processRamble } from '../src/pipeline/process.ts';
+import { processRamble } from '../src/pipeline/process.ts';
+import {
+  activeEmbeddingSpace,
+  createSimulatedDeviceEmbedder,
+} from '../src/providers/embedding.ts';
 import { hybridSearch } from '../src/pipeline/search.ts';
 import { mergeEntities, resolveEntity } from '../src/pipeline/entities.ts';
 
@@ -425,13 +429,22 @@ describe('hybrid search', () => {
  * as a fallback, at the configured width, and writes the vectors back exactly
  * as POST /v1/embeddings does.
  */
+/**
+ * Stands in for the phone.
+ *
+ * Not the server's own embedding provider: on a device deployment that one
+ * refuses to embed, because the server genuinely cannot. Borrowing it to fake
+ * a device was hiding that distinction.
+ */
+const deviceEmbedder = createSimulatedDeviceEmbedder(activeEmbeddingSpace().dimension);
+
 async function fillVectorsAsDeviceWould(userId: string, rambleId: string): Promise<void> {
   const { rows } = await pool.query<{ id: string; content: string }>(
     `SELECT id, content FROM embedding_records
       WHERE ramble_id = $1 AND embedding IS NULL`,
     [rambleId],
   );
-  const vectors = await embedding.embed(rows.map((r) => r.content));
+  const vectors = await deviceEmbedder.embed(rows.map((r) => r.content));
 
   for (const [index, row] of rows.entries()) {
     const vector = vectors[index];
@@ -445,7 +458,7 @@ async function fillVectorsAsDeviceWould(userId: string, rambleId: string): Promi
 }
 
 async function embedAsDeviceWould(text: string): Promise<number[]> {
-  const [vector] = await embedding.embed([text]);
+  const [vector] = await deviceEmbedder.embed([text]);
   if (!vector) throw new Error('Test embedder produced no vector.');
   return vector;
 }

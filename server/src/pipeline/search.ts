@@ -2,6 +2,7 @@ import { pool, toVectorLiteral } from '../db/pool.ts';
 import { config } from '../lib/config.ts';
 import { timed } from '../lib/logger.ts';
 import { embedding } from './process.ts';
+import { activeEmbeddingSpace } from '../providers/embedding.ts';
 
 /**
  * Hybrid search over three complementary systems, fused into one ranking:
@@ -187,18 +188,22 @@ async function semanticSearch(
   limit: number,
   options: SearchOptions,
 ): Promise<RankedRow[]> {
+  const space = activeEmbeddingSpace();
   const vector =
-    options.queryVector ??
-    (config.embedding.provider === 'device'
-      ? undefined
-      : (await embedding.embed([query]))[0]);
+    options.queryVector ?? (space.serverEmbeds ? (await embedding.embed([query]))[0] : undefined);
 
-  if (!vector || vector.length !== config.embedding.dimension) return [];
+  if (!vector || vector.length !== space.dimension) return [];
 
-  const params: unknown[] = [userId, toVectorLiteral(vector)];
+  const params: unknown[] = [userId, toVectorLiteral(vector), space.model, space.revision];
   const filters = filterClauses(options, params, 'e');
   params.push(limit);
 
+  // Only vectors from the space this query was embedded in.
+  //
+  // Apple's on-device model and OpenAI's truncated one are both 512 wide, so
+  // width can no longer tell them apart. Without this clause a deployment that
+  // ever switched providers would silently rank the old corpus against the new
+  // query and return confident nonsense.
   const { rows } = await pool.query<RankedRow>(
     `SELECT e.ramble_id, e.source_kind, e.source_id, e.content,
             1 - (e.embedding <=> $2::vector) AS rank
@@ -206,6 +211,8 @@ async function semanticSearch(
        JOIN rambles r ON r.id = e.ramble_id
       WHERE e.user_id = $1
         AND e.embedding IS NOT NULL
+        AND e.model = $3
+        AND e.model_revision = $4
         ${filters}
       ORDER BY e.embedding <=> $2::vector
       LIMIT $${params.length}`,

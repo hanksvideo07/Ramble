@@ -17,7 +17,8 @@
     "start:prod": "tsx src/index.ts",
     "eval:models": "tsx scripts/eval-models.ts",
     "providers:audit": "tsx scripts/audit-providers.ts",
-    "eval:routing": "tsx scripts/eval-routing.ts"
+    "eval:routing": "tsx scripts/eval-routing.ts",
+    "embeddings:backfill": "tsx scripts/embeddings-backfill.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",

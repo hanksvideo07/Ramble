@@ -3,7 +3,7 @@ import { pool, toVectorLiteral, withTransaction } from '../db/pool.ts';
 import { config } from '../lib/config.ts';
 import { log, timed } from '../lib/logger.ts';
 import { getAudio } from '../lib/storage.ts';
-import { createEmbeddingProvider } from '../providers/embedding.ts';
+import { activeEmbeddingSpace, createEmbeddingProvider } from '../providers/embedding.ts';
 import { createTranscriptionProvider } from '../providers/transcription.ts';
 import { createUnderstandingProvider } from '../providers/understanding.ts';
 import type { UnderstandingResult } from '../providers/schema.ts';
@@ -562,12 +562,12 @@ async function embedStage(rambleId: string): Promise<void> {
   // records what should be searchable and leaves the vector NULL for the
   // device to fill in. Lexical and structured search work immediately either
   // way; only semantic search waits for the device to catch up.
-  const onDevice = config.embedding.provider === 'device';
-  const vectors = onDevice
-    ? []
-    : await timed('embedding.latency', { ramble_id: rambleId, units: units.length }, () =>
+  const space = activeEmbeddingSpace();
+  const vectors = space.serverEmbeds
+    ? await timed('embedding.latency', { ramble_id: rambleId, units: units.length }, () =>
         embedding.embed(units.map((u) => u.content)),
-      );
+      )
+    : [];
 
   await withTransaction(async (client) => {
     // Rebuild this ramble's index wholesale so re-processing never leaves
@@ -579,9 +579,13 @@ async function embedStage(rambleId: string): Promise<void> {
       const unit = units[i]!;
       const vector = vectors[i];
       await client.query(
+        // model and model_revision together identify the vector space. Search
+        // filters on both, so omitting the revision here would leave every
+        // server-embedded row invisible to the very search it was built for.
         `INSERT INTO embedding_records
-           (user_id, ramble_id, source_kind, source_id, content, embedding, model, pipeline_version)
-         VALUES ($1,$2,$3,$4,$5,$6::vector,$7,$8)`,
+           (user_id, ramble_id, source_kind, source_id, content, embedding,
+            model, model_revision, pipeline_version)
+         VALUES ($1,$2,$3,$4,$5,$6::vector,$7,$8,$9)`,
         [
           ramble.user_id,
           rambleId,
@@ -589,7 +593,8 @@ async function embedStage(rambleId: string): Promise<void> {
           unit.sourceId,
           unit.content,
           vector ? toVectorLiteral(vector) : null,
-          onDevice ? config.embedding.model : embedding.model,
+          space.model,
+          space.revision,
           PIPELINE_VERSION,
         ],
       );
@@ -610,20 +615,31 @@ export async function indexEntityOverview(
   name: string,
   overview: string,
 ): Promise<void> {
-  const [vector] = await embedding.embed([`${name}: ${overview}`]);
-  if (!vector) return;
+  const space = activeEmbeddingSpace();
+  // Entity overviews are written by the server, so on a device deployment
+  // there is no vector to be had; the row is still worth indexing lexically.
+  const [vector] = space.serverEmbeds ? await embedding.embed([`${name}: ${overview}`]) : [];
   await client.query(
     `DELETE FROM embedding_records WHERE source_kind = 'entity_overview' AND source_id = $1`,
     [entityId],
   );
   await client.query(
     `INSERT INTO embedding_records
-       (user_id, ramble_id, source_kind, source_id, content, embedding, model, pipeline_version)
-     SELECT $1, r.id, 'entity_overview', $2, $3, $4::vector, $5, $6
+       (user_id, ramble_id, source_kind, source_id, content, embedding,
+        model, model_revision, pipeline_version)
+     SELECT $1, r.id, 'entity_overview', $2, $3, $4::vector, $5, $6, $7
        FROM rambles r
       WHERE r.user_id = $1
       ORDER BY r.recorded_at DESC LIMIT 1`,
-    [userId, entityId, `${name}: ${overview}`, toVectorLiteral(vector), embedding.model, PIPELINE_VERSION],
+    [
+      userId,
+      entityId,
+      `${name}: ${overview}`,
+      vector ? toVectorLiteral(vector) : null,
+      space.model,
+      space.revision,
+      PIPELINE_VERSION,
+    ],
   );
 }
 

@@ -4,6 +4,7 @@ import { pool, toVectorLiteral } from '../db/pool.ts';
 import { config } from '../lib/config.ts';
 import { HttpError, requireUser } from '../lib/auth.ts';
 import { log } from '../lib/logger.ts';
+import { activeEmbeddingSpace } from '../providers/embedding.ts';
 
 /**
  * Embeddings produced on the device.
@@ -30,12 +31,17 @@ export async function embeddingRoutes(app: FastifyInstance): Promise<void> {
       [user.id, query.limit],
     );
 
+    const space = activeEmbeddingSpace();
     return {
-      units: rows,
-      dimension: config.embedding.dimension,
+      // Nothing for the device to do when the server owns embedding; handing
+      // it work it must not complete would just waste the phone's battery.
+      units: space.serverEmbeds ? [] : rows,
+      dimension: space.dimension,
       // Vectors are only comparable within one model revision, so the client
       // is told which one this corpus is built from.
-      expected_revision: config.embedding.deviceRevision,
+      expected_revision: space.revision,
+      // Lets the app say why it has nothing to do, rather than looking broken.
+      server_embeds: space.serverEmbeds,
     };
   });
 
@@ -52,13 +58,35 @@ export async function embeddingRoutes(app: FastifyInstance): Promise<void> {
       })
       .parse(request.body);
 
+    const space = activeEmbeddingSpace();
+
+    // The server owning embedding is the whole reason to refuse here. Both
+    // models produce vectors of the same width, so a stale client posting
+    // Apple vectors into an OpenAI corpus would be accepted by a width check
+    // and would quietly poison every future search.
+    if (space.serverEmbeds) {
+      throw new HttpError(
+        409,
+        'This account is embedded on the server. Device vectors are not accepted.',
+      );
+    }
+
     // A width mismatch means a different model, not a smaller payload. Storing
     // it would corrupt every future search, so it is rejected outright.
-    const wrongWidth = body.vectors.find((v) => v.vector.length !== config.embedding.dimension);
+    const wrongWidth = body.vectors.find((v) => v.vector.length !== space.dimension);
     if (wrongWidth) {
       throw new HttpError(
         400,
-        `Expected ${config.embedding.dimension}-dimensional vectors, got ${wrongWidth.vector.length}.`,
+        `Expected ${space.dimension}-dimensional vectors, got ${wrongWidth.vector.length}.`,
+      );
+    }
+
+    // A device on an older build embeds into a space this corpus has moved on
+    // from. Its vectors are valid, just not comparable to anything here.
+    if (body.revision !== space.revision) {
+      throw new HttpError(
+        409,
+        `These vectors are from revision ${body.revision}; this account is on ${space.revision}.`,
       );
     }
 
@@ -68,9 +96,9 @@ export async function embeddingRoutes(app: FastifyInstance): Promise<void> {
       // into a row its sender owns.
       const { rowCount } = await pool.query(
         `UPDATE embedding_records
-            SET embedding = $3::vector, model_revision = $4, model = 'apple.nl_contextual'
+            SET embedding = $3::vector, model_revision = $4, model = $5
           WHERE id = $1 AND user_id = $2`,
-        [entry.id, user.id, toVectorLiteral(entry.vector), body.revision],
+        [entry.id, user.id, toVectorLiteral(entry.vector), body.revision, space.model],
       );
       stored += rowCount ?? 0;
     }
