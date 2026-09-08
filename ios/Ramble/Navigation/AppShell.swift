@@ -69,6 +69,7 @@ struct AppShell: View {
     @State private var tab: Tab = .rambles
     @State private var showingRecorder = false
     @State private var showingCompose = false
+    @State private var composeWithClipboard = false
     @State private var deepLink = DeepLink.shared
 
     // Held here so the models and their navigation stacks outlive a tab switch.
@@ -106,7 +107,10 @@ struct AppShell: View {
             BottomBar(
                 tab: $tab,
                 startRecording: { showingRecorder = true },
-                startWriting: { showingCompose = true }
+                startWriting: {
+                    composeWithClipboard = false
+                    showingCompose = true
+                }
             )
         }
         .background(Theme.Palette.paper)
@@ -121,7 +125,7 @@ struct AppShell: View {
             }
         }
         .sheet(isPresented: $showingCompose) {
-            ComposeView {
+            ComposeView(startWithClipboard: composeWithClipboard) {
                 tab = .rambles
                 Task { await timeline.refresh() }
             }
@@ -153,8 +157,9 @@ struct AppShell: View {
         switch destination {
         case .record:
             showingRecorder = true
-        case .compose:
+        case .compose(let paste):
             tab = .rambles
+            composeWithClipboard = paste
             showingCompose = true
         case .search:
             tab = .ask

@@ -10,6 +10,8 @@
 	<string>Ramble adds reminders you asked for out loud to your reminders list.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Ramble shows a live transcript while you speak.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

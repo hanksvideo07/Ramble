@@ -72,7 +72,7 @@ final class DeepLink {
 
     enum Destination: Equatable {
         case record
-        case compose
+        case compose(paste: Bool)
         case search
         case ask(String)
         case ramble(String)
@@ -104,7 +104,10 @@ final class DeepLink {
         case "record":
             pending = .record
         case "compose", "write":
-            pending = .compose
+            // ?paste=1 comes from the widget's Paste button, which means "open
+            // this with what I just copied already in it".
+            let wantsPaste = components?.queryItems?.contains { $0.name == "paste" } ?? false
+            pending = .compose(paste: wantsPaste)
         case "search":
             pending = .search
         case "ask":

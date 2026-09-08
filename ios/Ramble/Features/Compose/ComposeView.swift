@@ -7,6 +7,9 @@ import SwiftUI
 /// does, which is the point — a thought is not a different kind of thing
 /// because it arrived through a keyboard.
 struct ComposeView: View {
+    /// Opens with whatever is on the clipboard already in place. Set by the
+    /// widget's Paste button, where the intent is unambiguous.
+    var startWithClipboard: Bool = false
     /// Called once the text has been handed to the server.
     var onFinish: () -> Void
 
@@ -88,7 +91,12 @@ struct ComposeView: View {
                 }
             }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            if startWithClipboard, text.isEmpty, let pasted = UIPasteboard.general.string {
+                text = pasted
+            }
+            focused = true
+        }
     }
 
     private var footer: some View {

@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		A1000002 /* Ramble.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ramble.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000002 /* RambleWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = RambleWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +17,27 @@
 			path = Ramble;
 			sourceTree = "<group>";
 		};
+		A2000003 /* RambleWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RambleWidgets;
+			sourceTree = "<group>";
+		};
+		A2000004 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A2000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +51,8 @@
 			isa = PBXGroup;
 			children = (
 				A1000003 /* Ramble */,
+				A2000003 /* RambleWidgets */,
+				A2000004 /* Shared */,
 				A1000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000002 /* Ramble.app */,
+				A2000002 /* RambleWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,18 +76,42 @@
 				A1000009 /* Sources */,
 				A1000004 /* Frameworks */,
 				A100000A /* Resources */,
+				A2000010 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A2000012 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1000003 /* Ramble */,
+				A2000004 /* Shared */,
+			);
+			name = Ramble;
+			productName = Ramble;
+			productReference = A1000002 /* Ramble.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A2000007 /* RambleWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A2000008 /* Build configuration list for PBXNativeTarget "RambleWidgets" */;
+			buildPhases = (
+				A2000009 /* Sources */,
+				A2000005 /* Frameworks */,
+				A200000A /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				A1000003 /* Ramble */,
+				A2000003 /* RambleWidgets */,
+				A2000004 /* Shared */,
 			);
-			name = Ramble;
-			productName = Ramble;
-			productReference = A1000002 /* Ramble.app */;
-			productType = "com.apple.product-type.application";
+			name = RambleWidgets;
+			productName = RambleWidgets;
+			productReference = A2000002 /* RambleWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -79,6 +124,9 @@
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					A1000007 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A2000007 = {
 						CreatedOnToolsVersion = 26.0;
 					};
 				};
@@ -98,12 +146,20 @@
 			projectRoot = "";
 			targets = (
 				A1000007 /* Ramble */,
+				A2000007 /* RambleWidgets */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A100000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A200000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -120,7 +176,50 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A2000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A2000010 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A2000011 /* RambleWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXBuildFile section */
+		A2000011 /* RambleWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A2000002 /* RambleWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXTargetDependency section */
+		A2000012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A2000007 /* RambleWidgets */;
+			targetProxy = A2000013 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		A2000013 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A2000007;
+			remoteInfo = RambleWidgets;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin XCBuildConfiguration section */
 		A100000C /* Debug */ = {
@@ -230,6 +329,58 @@
 			};
 			name = Release;
 		};
+		A200000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 88339DP79V;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "RambleWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Ramble;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = app.ramble.Ramble.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A200000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 88339DP79V;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "RambleWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Ramble;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = app.ramble.Ramble.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -247,6 +398,15 @@
 			buildConfigurations = (
 				A100000C /* Debug */,
 				A100000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A2000008 /* Build configuration list for PBXNativeTarget "RambleWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A200000E /* Debug */,
+				A200000F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

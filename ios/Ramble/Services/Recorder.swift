@@ -175,8 +175,13 @@ final class Recorder {
             volatileText = ""
             state = .recording
 
+            // A long ramble is invisible once the screen locks, which is
+            // exactly when someone is most likely to be walking and talking.
+            RecordingActivity.start(at: startedAt ?? Date())
+
             startDisplayTimer()
         } catch let error as RecorderError {
+            RecordingActivity.stop()
             teardown()
             state = .failed(error.localizedDescription)
         } catch {
@@ -234,6 +239,7 @@ final class Recorder {
         guard state == .recording else { return }
         let url = audioFile?.url
         let duration = elapsed
+        RecordingActivity.stop()
         teardown()
 
         guard let url else {
@@ -247,6 +253,7 @@ final class Recorder {
 
     func cancel() {
         let url = audioFile?.url
+        RecordingActivity.stop()
         teardown()
         if let url { try? FileManager.default.removeItem(at: url) }
         reset()
