@@ -72,6 +72,7 @@ final class DeepLink {
 
     enum Destination: Equatable {
         case record
+        case compose
         case search
         case ask(String)
         case ramble(String)
@@ -93,7 +94,7 @@ final class DeepLink {
         #endif
     }
 
-    /// Parses `ramble://record`, `ramble://search`, `ramble://ask?q=…`,
+    /// Parses `ramble://record`, `ramble://compose`, `ramble://search`, `ramble://ask?q=…`,
     /// `ramble://ramble/<id>`, and `ramble://entity/<id>`.
     func handle(_ url: URL) {
         guard url.scheme == "ramble" else { return }
@@ -102,6 +103,8 @@ final class DeepLink {
         switch url.host() {
         case "record":
             pending = .record
+        case "compose", "write":
+            pending = .compose
         case "search":
             pending = .search
         case "ask":

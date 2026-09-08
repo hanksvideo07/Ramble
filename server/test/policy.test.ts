@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { decideConfirmation } from '../src/actions/policy.ts';
-import { sanitizeTitle } from '../src/providers/understanding.ts';
+import { sanitizeSummary, sanitizeTitle } from '../src/providers/understanding.ts';
 
 describe('action confirmation policy', () => {
   it('never sends external communication unattended, however confident', () => {
@@ -112,5 +112,39 @@ describe('title sanitizing', () => {
       sanitizeTitle({ ...base, items: [], title: 'Summarize the transcript' }),
       'Discussed pricing with Sarah at Nationwide',
     );
+  });
+});
+
+describe('summary sanitizing', () => {
+  const base = {
+    title: 'A simpler plan',
+    clean_transcript: 'We decided to launch with one plan at twenty nine dollars a month.',
+    language: 'en',
+    items: [],
+    entities: [],
+    relationships: [],
+    actions: [],
+  };
+
+  it('replaces a summary that describes the extraction instead of the content', () => {
+    // Observed live: "Extracted items from transcript" on a typed ramble.
+    // It is useless, and it shows the machinery to someone promised a notebook.
+    const summary = sanitizeSummary({ ...base, summary: 'Extracted items from transcript' } as never);
+    assert.match(summary, /twenty nine dollars/);
+  });
+
+  it('leaves a real summary alone', () => {
+    const real = 'One price, a clearer trial, and a note for Maya.';
+    assert.equal(sanitizeSummary({ ...base, summary: real } as never), real);
+  });
+
+  it('falls back to an item when there is no transcript to quote', () => {
+    const summary = sanitizeSummary({
+      ...base,
+      clean_transcript: '',
+      summary: 'Summary of the user request',
+      items: [{ kind: 'task', title: 'Sketch the pricing page', confidence: 0.8 }],
+    } as never);
+    assert.equal(summary, 'Sketch the pricing page');
   });
 });

@@ -140,7 +140,14 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
           .join('; '),
       };
     }
-    return { ok: true, value: { ...parsed.data, title: sanitizeTitle(parsed.data) } };
+    return {
+      ok: true,
+      value: {
+        ...parsed.data,
+        title: sanitizeTitle(parsed.data),
+        summary: sanitizeSummary(parsed.data),
+      },
+    };
   }
 }
 
@@ -170,6 +177,28 @@ function routeStatedDestinations(actions: UnderstandingResult['actions']): Under
  */
 const META_TITLE =
   /^\s*(extract|record|identify|summar|analy|transcri|understand|output|structur|process|generat|list of|the user|user'?s)/i;
+
+/**
+ * The same failure as a meta-title, in the line underneath it.
+ *
+ * A small model asked to summarize sometimes describes the task instead of the
+ * content — "Extracted items from transcript" — which is both useless and a
+ * little unnerving, since it shows the machinery to someone who was promised a
+ * notebook. Observed live on a typed ramble.
+ *
+ * The fallback is the person's own words rather than a generated apology: the
+ * opening of what they actually said is a better summary than a sentence about
+ * summarizing.
+ */
+export function sanitizeSummary(result: UnderstandingResult): string {
+  const summary = result.summary.trim();
+  if (summary && !META_TITLE.test(summary)) return summary;
+
+  const source = result.clean_transcript?.trim() || result.items[0]?.title?.trim() || '';
+  const clean = source.replace(/\s+/g, ' ').trim();
+  if (!clean) return summary || 'A short recording.';
+  return clean.length <= 160 ? clean : `${clean.slice(0, 159).trimEnd()}\u{2026}`;
+}
 
 export function sanitizeTitle(result: UnderstandingResult): string {
   const title = result.title.trim();

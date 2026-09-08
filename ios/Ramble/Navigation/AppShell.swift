@@ -64,6 +64,7 @@ struct AppShell: View {
 
     @State private var tab: Tab = .rambles
     @State private var showingRecorder = false
+    @State private var showingCompose = false
     @State private var deepLink = DeepLink.shared
 
     // Held here so the models and their navigation stacks outlive a tab switch.
@@ -98,7 +99,11 @@ struct AppShell: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            BottomBar(tab: $tab, startRecording: { showingRecorder = true })
+            BottomBar(
+                tab: $tab,
+                startRecording: { showingRecorder = true },
+                startWriting: { showingCompose = true }
+            )
         }
         .background(Theme.Palette.paper)
         .fullScreenCover(isPresented: $showingRecorder) {
@@ -108,6 +113,12 @@ struct AppShell: View {
                 // see, not whatever screen you happened to be on.
                 tab = .rambles
                 CaptureQueue.shared.sync()
+                Task { await timeline.refresh() }
+            }
+        }
+        .sheet(isPresented: $showingCompose) {
+            ComposeView {
+                tab = .rambles
                 Task { await timeline.refresh() }
             }
         }
@@ -138,6 +149,9 @@ struct AppShell: View {
         switch destination {
         case .record:
             showingRecorder = true
+        case .compose:
+            tab = .rambles
+            showingCompose = true
         case .search:
             tab = .ask
         case .ask(let question):
@@ -161,10 +175,11 @@ struct AppShell: View {
 private struct BottomBar: View {
     @Binding var tab: Tab
     let startRecording: () -> Void
+    let startWriting: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            RecordDock(action: startRecording)
+            RecordDock(record: startRecording, write: startWriting)
             HStack(spacing: 0) {
                 ForEach(Tab.allCases, id: \.self) { item in
                     Button {
@@ -207,15 +222,30 @@ private struct BottomBar: View {
 /// The primary action, and the only sentence on the home screen that tells
 /// you what to do with it.
 struct RecordDock: View {
-    let action: () -> Void
+    let record: () -> Void
+    let write: () -> Void
 
     var body: some View {
         VStack(spacing: Theme.Metrics.sm) {
-            RecordingControl(action: action)
-            Text("Just talk.")
-                .font(.system(size: 13, design: .serif))
-                .italic()
-                .foregroundStyle(Theme.Palette.secondary)
+            RecordingControl(action: record)
+
+            // Speaking stays the headline; writing is offered beside it rather
+            // than as an equal, so the button still reads as the one thing to
+            // press.
+            HStack(spacing: 6) {
+                Text("Just talk.")
+                    .font(.system(size: 13, design: .serif))
+                    .italic()
+                    .foregroundStyle(Theme.Palette.secondary)
+                Text("or")
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary.opacity(0.7))
+                Button("write it", action: write)
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.action)
+                    .buttonStyle(.plain)
+            }
+            .frame(minHeight: 28)
         }
         .padding(.top, Theme.Metrics.sm)
     }

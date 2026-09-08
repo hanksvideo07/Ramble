@@ -227,6 +227,29 @@ actor APIClient {
         return try await send(request("POST", "/v1/rambles", body: body), as: CreateResponse.self).id
     }
 
+    /// Creates a ramble from typed or pasted text.
+    ///
+    /// No audio, and nothing pretends otherwise. Everything downstream is
+    /// identical — the same extraction, entities, actions, and search.
+    func createTextRamble(clientId: String, text: String, source: String = "ios") async throws -> String {
+        struct Body: Encodable {
+            let client_id: String
+            let text: String
+            let recorded_at: String
+            let source_device: String
+        }
+        let body = Body(
+            client_id: clientId,
+            text: text,
+            recorded_at: ISO8601DateFormatter.plain.string(from: Date()),
+            source_device: source
+        )
+        return try await send(
+            request("POST", "/v1/rambles/text", body: body),
+            as: CreateResponse.self
+        ).id
+    }
+
     /// Uploads the recording as multipart form data.
     func uploadAudio(rambleId: String, fileURL: URL) async throws {
         guard let token else { throw APIError.notAuthenticated }

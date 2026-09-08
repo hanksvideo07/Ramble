@@ -96,6 +96,79 @@ export async function rambleRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * A ramble made of text rather than speech.
+   *
+   * Typed in the app, or pasted from somewhere else. Everything downstream is
+   * identical — the same extraction, the same entities, the same actions,
+   * findable by the same search — because a thought does not become a
+   * different kind of thing depending on how it arrived.
+   *
+   * There is no audio, and nothing pretends there is. The pipeline already
+   * skips transcription whenever a transcript exists, so this writes one
+   * directly and starts at understanding.
+   */
+  app.post('/v1/rambles/text', async (request, reply) => {
+    const user = await requireUser(request);
+    const body = z
+      .object({
+        client_id: z.string().min(1).max(120),
+        text: z.string().min(1).max(50_000),
+        recorded_at: z.string().optional(),
+        source_device: z.enum(['ios', 'watch', 'action_button', 'widget', 'import']).default('ios'),
+      })
+      .parse(request.body);
+
+    const text = body.text.trim();
+    if (text.length === 0) throw new HttpError(400, 'There is nothing in that.');
+
+    const recordedAt = body.recorded_at ?? new Date().toISOString();
+
+    const rambleId = await withTransaction(async (client) => {
+      const { rows } = await client.query<{ id: string; created: boolean }>(
+        `INSERT INTO rambles (user_id, client_id, recorded_at, duration_seconds,
+                              source_device, processing_state)
+         VALUES ($1,$2,$3,0,$4,'transcribed')
+         ON CONFLICT (user_id, client_id) DO UPDATE SET recorded_at = EXCLUDED.recorded_at
+         RETURNING id, (xmax = 0) AS created`,
+        [user.id, body.client_id, recordedAt, body.source_device],
+      );
+      const ramble = rows[0]!;
+
+      // Replacing rather than appending, so a retried submit does not stack
+      // duplicate transcripts under the same client id.
+      await client.query(`DELETE FROM transcripts WHERE ramble_id = $1`, [ramble.id]);
+
+      const { rows: transcripts } = await client.query<{ id: string }>(
+        `INSERT INTO transcripts (ramble_id, user_id, provider, model, raw_text, origin)
+         VALUES ($1,$2,'typed','none',$3,'device')
+         RETURNING id`,
+        [ramble.id, user.id, text],
+      );
+
+      // One segment spanning the whole thing. Typed text has no timings, and
+      // inventing them would put fake positions on a player that is not there.
+      await client.query(
+        `INSERT INTO transcript_segments
+           (transcript_id, ramble_id, user_id, idx, start_seconds, end_seconds, text)
+         VALUES ($1,$2,$3,0,0,0,$4)`,
+        [transcripts[0]!.id, ramble.id, user.id, text],
+      );
+
+      return ramble.id;
+    });
+
+    await track(user.id, 'ramble_created', {
+      source_device: body.source_device,
+      duration_seconds: 0,
+      typed: true,
+    });
+    await emitWebhook(user.id, 'ramble.created', { ramble_id: rambleId });
+
+    enqueue(rambleId);
+    return reply.code(202).send({ id: rambleId, processing_state: 'transcribed' });
+  });
+
+  /**
    * Uploads the audio and starts processing. Separate from creation so a
    * device that recorded offline can upload later without losing its place.
    */
