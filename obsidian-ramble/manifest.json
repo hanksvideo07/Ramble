@@ -1,0 +1,9 @@
+{
+  "id": "ramble",
+  "name": "Ramble",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Brings your Ramble recordings into your vault as notes, with the people and projects you mentioned linked so they build their own pages.",
+  "author": "Ramble",
+  "isDesktopOnly": false
+}

@@ -13,6 +13,8 @@ struct AgentsView: View {
     @State private var showingNew = false
     @State private var createdSecret: CreatedSecret?
     @State private var copiedEndpoint = false
+    @State private var revealToken = false
+    @State private var token: String?
 
     struct CreatedSecret: Identifiable {
         let url: String
@@ -85,12 +87,54 @@ struct AgentsView: View {
             }
             .buttonStyle(SecondaryButtonStyle())
 
+            tokenRow
+
             // The one thing a person should understand before doing this.
             StatusNotice(
                 message: "It can read, and it can add. It cannot approve.",
                 detail: "An assistant connected here can see everything you've recorded. It can never approve an action, send anything, or delete anything — those still need you, in this app.",
                 systemImage: "hand.raised"
             )
+        }
+    }
+
+    /// The access token, hidden until asked for.
+    ///
+    /// It is the key to everything this account holds, so it is not printed on
+    /// a screen someone might be showing to a room. Revealing it is a
+    /// deliberate act, and what it can do is stated next to it.
+    @ViewBuilder
+    private var tokenRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
+            SectionHeading("Access token")
+            if revealToken, let token {
+                Text(token)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.ink)
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+                    .padding(Theme.Metrics.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.Palette.subtle)
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: Theme.Metrics.inputRadius, style: .continuous)
+                    )
+                Button("Copy token") { UIPasteboard.general.string = token }
+                    .buttonStyle(SecondaryButtonStyle())
+                Text("Anything holding this can read everything you have recorded. Treat it like a password.")
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Button("Show my token") {
+                    Task {
+                        token = await APIClient.shared.currentToken
+                        revealToken = true
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
         }
     }
 
