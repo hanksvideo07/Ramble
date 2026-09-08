@@ -11,6 +11,8 @@ import {
   understandingUserPrompt,
 } from './prompts.ts';
 import { chat, extractJSON } from './openrouter.ts';
+import { routeAction } from '../actions/routing.ts';
+import { groundActions } from '../actions/grounding.ts';
 import type { UnderstandingInput, UnderstandingProvider } from './types.ts';
 
 /**
@@ -52,7 +54,7 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
     });
 
     const parsed = this.validate(first);
-    if (parsed.ok) return parsed.value;
+    if (parsed.ok) return this.clean(parsed.value, input.transcript);
 
     // One repair attempt, quoting the model's own output back at it. Small
     // models usually miss a required field rather than misunderstand the task,
@@ -77,9 +79,30 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
     });
 
     const second = this.validate(repaired);
-    if (second.ok) return second.value;
+    if (second.ok) return this.clean(second.value, input.transcript);
 
     throw new Error(`Understanding output failed validation after a repair attempt: ${second.error}`);
+  }
+
+  /**
+   * Two guards over the model's actions, in the order that matters.
+   *
+   * Grounding first: an action assembled out of the prompt's own examples has
+   * no business being routed anywhere. Only what survives is then sent to the
+   * destination the person named.
+   */
+  private clean(result: UnderstandingResult, transcript: string): UnderstandingResult {
+    const { actions, dropped } = groundActions(result.actions, transcript);
+    for (const item of dropped) {
+      log.warn('understanding.dropped_ungrounded_action', {
+        model: this.model,
+        type: item.type,
+        // The evidence is the model's own words about what it heard, not the
+        // person's transcript, so it is safe to log.
+        evidence: item.evidence.slice(0, 120),
+      });
+    }
+    return { ...result, actions: routeStatedDestinations(actions) };
   }
 
   private validate(
@@ -104,6 +127,24 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
     }
     return { ok: true, value: { ...parsed.data, title: sanitizeTitle(parsed.data) } };
   }
+}
+
+/**
+ * Sends each action where the person said to send it.
+ *
+ * Rule 5b of the prompt teaches this, but a prompt is a request rather than a
+ * guarantee, and the failure is silent: the thing lands in Reminders instead
+ * of Calendar and is never seen again. A re-route only fires when the person
+ * named exactly one destination and the model chose a different one.
+ */
+function routeStatedDestinations(actions: UnderstandingResult['actions']): UnderstandingResult['actions'] {
+  return actions.map((action) => {
+    const { action: routed, movedFrom } = routeAction(action);
+    if (movedFrom) {
+      log.info('understanding.rerouted_action', { from: movedFrom, to: routed.type });
+    }
+    return routed;
+  });
 }
 
 /**
@@ -245,7 +286,7 @@ class MockUnderstandingProvider implements UnderstandingProvider {
       items,
       entities: this.guessEntities(input.transcript),
       relationships: [],
-      actions,
+      actions: routeStatedDestinations(actions),
     };
   }
 

@@ -172,7 +172,16 @@ export const understandingJsonSchema = {
         type: 'object',
         required: ['type', 'intent_class', 'confidence'],
         properties: {
-          type: { type: 'string', enum: [...ACTION_TYPES] },
+          type: {
+            type: 'string',
+            enum: [...ACTION_TYPES],
+            description:
+              'Where this belongs. calendar.create_event for something that happens at a ' +
+              'time and occupies it; reminder.create for something to be nudged about at a ' +
+              'time; task.create for something to do with no time; note.create for something ' +
+              'to keep. If the person named the destination out loud ("on my calendar", ' +
+              '"remind me"), use the one they named.',
+          },
           intent_class: { type: 'string', enum: [...INTENT_CLASSES] },
           confidence: { type: 'number' },
           parameters: {

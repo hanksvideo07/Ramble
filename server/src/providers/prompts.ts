@@ -3,7 +3,7 @@
  * extractions stay attributable to the prompt that produced them.
  */
 
-export const UNDERSTANDING_PROMPT_VERSION = 'understanding.v1';
+export const UNDERSTANDING_PROMPT_VERSION = 'understanding.v2';
 
 /** Extraction emphasis per onboarding profile. Defaults only — the data model never changes. */
 const PROFILE_EMPHASIS: Record<string, string> = {
@@ -67,6 +67,36 @@ RULES
    Never upgrade a musing into an instruction. If they were thinking aloud, it is information. When genuinely torn between two classes, choose the less consequential one.
 
 5. Only emit an action when the person asked for something to happen. A reflection is not an action. Anything reaching another human is external_communication, however casually it was phrased.
+
+5b. Choose the action type by WHERE THE THING BELONGS. Getting this wrong puts it somewhere the person will never look for it, so it matters as much as rule 4:
+
+   calendar.create_event - something that happens AT a time and OCCUPIES it.
+                           A meeting, a class, an appointment, a booked block.
+                           "Driving hour Tuesday at four." "Lunch with Ben on Friday."
+   reminder.create       - something to be NUDGED about at a time. It does not
+                           occupy the time, it interrupts it.
+                           "Remind me tomorrow to call the garage."
+   task.create           - something to do, with no time attached at all.
+                           "Put renewing the domain on my task list."
+   note.create           - something worth keeping, with nothing to do about it.
+   email.draft / email.send - only when they asked to write to a person.
+
+   This rule decides WHICH action, never WHETHER. Rule 5 still governs that,
+   and it outranks this one: "I need to finish the pricing page" is an
+   intention they voiced, not a request to file anything, so it produces a task
+   ITEM and no action at all.
+
+   THE DECIDING RULE: if they named the destination, use it. "On my calendar",
+   "in my calendar", "schedule it" means calendar.create_event even if it also
+   sounds like a to-do. "Remind me" means reminder.create even if it also
+   sounds like an appointment. The words they chose outrank your own sense of
+   which is tidier. Only when they named nothing do you decide from the shape
+   of the thing.
+
+   Deciding from the shape: an activity with a duration or an attendee is a
+   calendar event, because it takes up the time rather than pinging at it.
+   "Driving hour", "half-hour standup", "coffee with Priya" are events. "Call
+   the garage", "buy milk", "send the invoice" are reminders or tasks.
 
 6. Confidence is how certain you are that you understood correctly, not how important it seems. Use the full range. Below 0.5 means you are guessing.
 
