@@ -79,11 +79,21 @@ const MARKERS: Record<Destination, RegExp[]> = {
  * reading stands.
  */
 export function statedDestination(text: string): Destination | null {
-  if (!text) return null;
-  const named = (Object.keys(MARKERS) as Destination[]).filter((destination) =>
+  const named = namedDestinations(text);
+  return named.length === 1 ? named[0]! : null;
+}
+
+/**
+ * Every destination named in the text.
+ *
+ * Routing needs exactly one to act on, but "did they ask for anything at all"
+ * is a different question, and two destinations is emphatically a yes to it.
+ */
+export function namedDestinations(text: string): Destination[] {
+  if (!text) return [];
+  return (Object.keys(MARKERS) as Destination[]).filter((destination) =>
     MARKERS[destination].some((pattern) => pattern.test(text)),
   );
-  return named.length === 1 ? named[0]! : null;
 }
 
 /**

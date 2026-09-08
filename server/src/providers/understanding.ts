@@ -13,6 +13,7 @@ import {
 import { chat, extractJSON } from './openrouter.ts';
 import { routeAction } from '../actions/routing.ts';
 import { groundActions } from '../actions/grounding.ts';
+import { floorIntentClass } from '../actions/intent.ts';
 import type { UnderstandingInput, UnderstandingProvider } from './types.ts';
 
 /**
@@ -85,11 +86,12 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
   }
 
   /**
-   * Two guards over the model's actions, in the order that matters.
+   * Three guards over the model's actions, in the order that matters.
    *
    * Grounding first: an action assembled out of the prompt's own examples has
-   * no business being routed anywhere. Only what survives is then sent to the
-   * destination the person named.
+   * no business being routed anywhere. What survives is then sent to the
+   * destination the person named, and finally anything they merely voiced is
+   * held back for a yes.
    */
   private clean(result: UnderstandingResult, transcript: string): UnderstandingResult {
     const { actions, dropped } = groundActions(result.actions, transcript);
@@ -102,7 +104,20 @@ class OpenRouterUnderstandingProvider implements UnderstandingProvider {
         evidence: item.evidence.slice(0, 120),
       });
     }
-    return { ...result, actions: routeStatedDestinations(actions) };
+    return {
+      ...result,
+      actions: routeStatedDestinations(actions).map((action) => {
+        const floored = floorIntentClass(action);
+        if (floored.intent_class !== action.intent_class) {
+          log.info('understanding.held_voiced_intention', {
+            type: action.type,
+            from: action.intent_class,
+            to: floored.intent_class,
+          });
+        }
+        return floored;
+      }),
+    };
   }
 
   private validate(
@@ -286,7 +301,7 @@ class MockUnderstandingProvider implements UnderstandingProvider {
       items,
       entities: this.guessEntities(input.transcript),
       relationships: [],
-      actions: routeStatedDestinations(actions),
+      actions: routeStatedDestinations(actions).map(floorIntentClass),
     };
   }
 
