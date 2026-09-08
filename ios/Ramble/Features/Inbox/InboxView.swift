@@ -65,7 +65,25 @@ struct InboxView: View {
 
     private var approvals: some View {
         VStack(alignment: .leading, spacing: Theme.Metrics.md) {
-            SectionHeading("Needs your yes", trailing: "\(model.pendingCount)")
+            HStack(alignment: .firstTextBaseline) {
+                SectionHeading("Needs your yes", trailing: "\(model.pendingCount)")
+                if model.bulkApprovable.count > 1 {
+                    Button("Approve \(model.bulkApprovable.count)") {
+                        Task { await model.approveAll(model.bulkApprovable) }
+                    }
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.action)
+                    .buttonStyle(.plain)
+                    .frame(minHeight: Theme.Metrics.minimumTouchTarget)
+                }
+            }
+
+            if model.bulkApprovable.count < model.pendingCount {
+                Text("Anything that reaches another person is left out of that \u{2014} those get an individual yes.")
+                    .rambleType(Theme.Text.meta)
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(model.inbox.pendingActions) { action in
                 ApprovalCard(
                     action: action,

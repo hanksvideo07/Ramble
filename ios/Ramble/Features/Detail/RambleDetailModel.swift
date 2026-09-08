@@ -130,6 +130,26 @@ final class RambleDetailModel {
         }
     }
 
+    /// Rewrites the recording's own title or summary.
+    ///
+    /// Both are model output and were previously permanent — you could correct
+    /// an item but not the sentence describing the whole recording. Reloading
+    /// afterwards rather than patching in place keeps this screen honest about
+    /// what the server actually stored.
+    func rename(title: String, summary: String?) async {
+        do {
+            try await APIClient.shared.updateRamble(
+                id: rambleId,
+                title: title,
+                summary: summary
+            )
+            lastActionError = nil
+            await load()
+        } catch {
+            lastActionError = error.localizedDescription
+        }
+    }
+
     func delete() async {
         try? await APIClient.shared.deleteRamble(id: rambleId)
     }

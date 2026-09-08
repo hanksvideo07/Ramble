@@ -467,6 +467,53 @@ export async function rambleRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  /**
+   * Corrects a recording's own title or summary.
+   *
+   * Both are model output, and until now both were permanent — you could fix
+   * an item the model got wrong but not the sentence at the top of the screen
+   * describing the whole recording. Edits are marked so reprocessing does not
+   * quietly overwrite them, the same way item corrections survive.
+   */
+  app.patch('/v1/rambles/:id', async (request) => {
+    const user = await requireUser(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        title: z.string().min(1).max(200).nullish(),
+        summary: z.string().max(2000).nullish(),
+      })
+      .parse(request.body);
+
+    if (body.title === undefined && body.summary === undefined) {
+      throw new HttpError(400, 'Nothing to change.');
+    }
+
+    const sets: string[] = [];
+    const params: unknown[] = [id, user.id];
+    if (body.title !== undefined) {
+      params.push(body.title);
+      sets.push(`title = $${params.length}`);
+    }
+    if (body.summary !== undefined) {
+      params.push(body.summary);
+      sets.push(`summary = $${params.length}`);
+    }
+    sets.push('title_edited_by_user = true');
+
+    const { rows } = await pool.query(
+      `UPDATE rambles SET ${sets.join(', ')}
+        WHERE id = $1 AND user_id = $2
+        RETURNING id, title, summary`,
+      params,
+    );
+    const updated = rows[0];
+    if (!updated) throw new HttpError(404, 'Ramble not found.');
+
+    await track(user.id, 'ramble_edited', {});
+    return updated;
+  });
+
   app.delete('/v1/rambles/:id', async (request, reply) => {
     const user = await requireUser(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

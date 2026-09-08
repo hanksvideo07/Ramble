@@ -482,7 +482,30 @@ actor APIClient {
         try await send(request("GET", "/v1/entities/\(id)"), as: EntityPage.self)
     }
 
+    /// Corrects a recording's own title or summary. Both are model output and
+    /// were previously permanent.
+    func updateRamble(id: String, title: String?, summary: String?) async throws {
+        struct Body: Encodable {
+            let title: String?
+            let summary: String?
+        }
+        let (data, response) = try await perform(
+            request("PATCH", "/v1/rambles/\(id)", body: Body(title: title, summary: summary))
+        )
+        try check(response, data: data)
+    }
+
     // MARK: - Actions
+
+    struct ActionList: Decodable { let actions: [RambleAction] }
+
+    /// Everything Ramble has done, or been asked not to do. The audit trail
+    /// for actions taken on someone's behalf.
+    func actions(states: [String]? = nil, limit: Int = 100) async throws -> [RambleAction] {
+        var path = "/v1/actions?limit=\(limit)"
+        if let states, !states.isEmpty { path += "&state=\(states.joined(separator: ","))" }
+        return try await send(request("GET", path), as: ActionList.self).actions
+    }
 
     func confirmAction(id: String) async throws {
         let (data, response) = try await perform(request("POST", "/v1/actions/\(id)/confirm"))

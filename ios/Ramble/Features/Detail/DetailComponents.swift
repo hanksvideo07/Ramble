@@ -440,3 +440,95 @@ struct RelatedRambleRow: View {
         .overlay(alignment: .bottom) { Hairline() }
     }
 }
+
+/// Rewriting a recording's own title and summary.
+///
+/// Both are model output, and were permanent until now: you could tell Ramble
+/// an item was not a task, but not that it had named the whole recording
+/// wrongly. An edit here is marked, so reprocessing leaves it alone rather than
+/// replacing the correction with another guess.
+struct EditRambleSheet: View {
+    let save: (String, String?) async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var summary: String
+    @State private var isSaving = false
+
+    init(title: String, summary: String, save: @escaping (String, String?) async -> Void) {
+        self.save = save
+        _title = State(initialValue: title)
+        _summary = State(initialValue: summary)
+    }
+
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Metrics.xl) {
+                    field("Title", text: $title, lines: 1...3, serif: true)
+                    field("Summary", text: $summary, lines: 3...8, serif: false)
+
+                    Text("Your wording is kept. Processing this recording again won't overwrite it.")
+                        .rambleType(Theme.Text.meta)
+                        .foregroundStyle(Theme.Palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .screenPadding()
+                .padding(.vertical, Theme.Metrics.lg)
+            }
+            .background(Theme.Palette.paper)
+            .navigationTitle("Rename")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundStyle(Theme.Palette.secondary)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        isSaving = true
+                        Task {
+                            let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                            await save(
+                                title.trimmingCharacters(in: .whitespaces),
+                                trimmed.isEmpty ? nil : trimmed
+                            )
+                            dismiss()
+                        }
+                    }
+                    .disabled(!canSave)
+                    .foregroundStyle(canSave ? Theme.Palette.action : Theme.Palette.secondary)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func field(
+        _ label: String,
+        text: Binding<String>,
+        lines: ClosedRange<Int>,
+        serif: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Metrics.sm) {
+            SectionHeading(label)
+            TextField(label, text: text, axis: .vertical)
+                .rambleType(serif ? Theme.Text.sectionSerif : Theme.Text.body)
+                .foregroundStyle(Theme.Palette.ink)
+                .lineLimit(lines)
+                .padding(Theme.Metrics.md)
+                .background(Theme.Palette.raised)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Metrics.inputRadius, style: .continuous)
+                        .strokeBorder(Theme.Palette.divider, lineWidth: 1)
+                )
+                .clipShape(
+                    RoundedRectangle(cornerRadius: Theme.Metrics.inputRadius, style: .continuous)
+                )
+        }
+    }
+}

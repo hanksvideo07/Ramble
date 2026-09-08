@@ -9,6 +9,7 @@ enum AppDestination: Hashable {
     case rambleQuoting(id: String, quote: String)
     case entity(String)
     case inbox
+    case activity
     case settings
 }
 
@@ -24,6 +25,7 @@ extension View {
                 RambleDetailView(rambleId: id, highlighting: quote)
             case .entity(let id): EntityDetailView(entityId: id)
             case .inbox: InboxView()
+            case .activity: ActivityView()
             case .settings: SettingsView()
             }
         }

@@ -45,6 +45,19 @@ struct RamblesView: View {
                     .foregroundStyle(Theme.Palette.ink)
             }
             Spacer()
+            NavigationLink(value: AppDestination.activity) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(Theme.Palette.secondary)
+                    .frame(
+                        width: Theme.Metrics.minimumTouchTarget,
+                        height: Theme.Metrics.minimumTouchTarget
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("What Ramble did")
+
             NavigationLink(value: AppDestination.settings) {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 17, weight: .regular))

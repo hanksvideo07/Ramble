@@ -366,8 +366,15 @@ async function persistUnderstanding(
       [rambleId],
     );
 
+    // A title the person rewrote is theirs, and reprocessing must not replace
+    // it with another guess. The transcript is always refreshed — that is
+    // machine output either way.
     await client.query(
-      `UPDATE rambles SET title = $2, summary = $3, clean_transcript = $4 WHERE id = $1`,
+      `UPDATE rambles
+          SET title = CASE WHEN title_edited_by_user THEN title ELSE $2 END,
+              summary = CASE WHEN title_edited_by_user THEN summary ELSE $3 END,
+              clean_transcript = $4
+        WHERE id = $1`,
       [rambleId, result.title, result.summary, result.clean_transcript ?? null],
     );
 

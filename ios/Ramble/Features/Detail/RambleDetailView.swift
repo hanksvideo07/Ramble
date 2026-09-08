@@ -12,6 +12,7 @@ struct RambleDetailView: View {
     @State private var player: AudioPlayerModel
     @State private var editingItem: ExtractedItem?
     @State private var confirmDelete = false
+    @State private var isEditingTitle = false
     @Environment(\.dismiss) private var dismiss
     @Environment(Session.self) private var session
 
@@ -81,6 +82,16 @@ struct RambleDetailView: View {
         .background(Theme.Palette.paper)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { menu }
+        .sheet(isPresented: $isEditingTitle) {
+            if let detail = model.detail {
+                EditRambleSheet(
+                    title: detail.title ?? "",
+                    summary: detail.summary ?? ""
+                ) { title, summary in
+                    await model.rename(title: title, summary: summary)
+                }
+            }
+        }
         .sheet(item: $editingItem) { item in
             EditItemSheet(item: item) { kind, title in
                 await model.correct(item, kind: kind, title: title)
@@ -259,6 +270,7 @@ struct RambleDetailView: View {
     private var menu: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                Button("Rename", systemImage: "pencil") { isEditingTitle = true }
                 Button("Process again", systemImage: "arrow.clockwise") {
                     Task { await model.reprocess() }
                 }

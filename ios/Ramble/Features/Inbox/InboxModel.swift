@@ -94,6 +94,30 @@ final class InboxModel {
         }
     }
 
+    /// Approves several at once.
+    ///
+    /// Sequential rather than concurrent on purpose: each one is a separate
+    /// decision the person is accountable for, and firing them in parallel
+    /// makes a partial failure impossible to describe afterwards. Anything
+    /// that fails keeps its own outcome and stays on screen.
+    func approveAll(_ actions: [RambleAction]) async {
+        for action in actions where outcomes[action.id] == nil {
+            await respond(to: action, approve: true)
+        }
+    }
+
+    /// Only what is safe to approve in a batch.
+    ///
+    /// Anything reaching another person is deliberately excluded, however many
+    /// are selected — the guide is unambiguous that those get an individual
+    /// yes, and a "approve all" that could send an email would quietly break
+    /// that promise.
+    var bulkApprovable: [RambleAction] {
+        inbox.pendingActions.filter {
+            $0.intentClass != "external_communication" && !$0.type.hasPrefix("email.")
+        }
+    }
+
     /// Marks an open item done. The inbox is only useful if things can leave it.
     func complete(_ item: ExtractedItem) async {
         do {
